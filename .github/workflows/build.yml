@@ -15,6 +15,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 180
     env:
+      PYTHONUTF8: '1'
       VCPKG_BINARY_SOURCES: clear
       VCPKG_DISABLE_METRICS: '1'
     steps:
