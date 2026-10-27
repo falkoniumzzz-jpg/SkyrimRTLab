@@ -55,6 +55,8 @@ jobs:
             project/out/toolchain.json
             project/out/BUILD-STATUS.txt
             project/_work/build-*/CMakeFiles/CMakeConfigureLog.yaml
+            project/_work/build-*/vcpkg-manifest-install.log
+            project/_work/vcpkg-*/buildtrees/**/*.log
           retention-days: 14
       - name: Upload independent probe
         if: always()
