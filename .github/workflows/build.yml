@@ -1,0 +1,73 @@
+name: Skyrim RT Lab Windows build
+on:
+  workflow_dispatch:
+    inputs:
+      probe_only:
+        description: Build only the independent DXR probe
+        type: boolean
+        default: false
+  push:
+    paths: ['SkyrimRTLab-source.zip', '.github/workflows/build.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      VCPKG_BINARY_SOURCES: clear
+      VCPKG_DISABLE_METRICS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Expand iPad source package
+        shell: pwsh
+        run: |
+          if (Test-Path SkyrimRTLab-source.zip) {
+            Expand-Archive SkyrimRTLab-source.zip -DestinationPath project
+          } else {
+            New-Item project -ItemType Directory
+            Get-ChildItem -Force | Where-Object { $_.Name -notin @('project','.git') } | Copy-Item -Destination project -Recurse
+          }
+      - name: Install CMake
+        run: python -m pip install cmake==4.2.3 ninja
+      - name: Build and package
+        shell: pwsh
+        env:
+          PROBE_ONLY: ${{ inputs.probe_only }}
+        run: |
+          if ($env:PROBE_ONLY -eq 'true') {
+            python project/scripts/build_windows.py --probe-only
+          } else {
+            python project/scripts/build_windows.py
+          }
+          exit $LASTEXITCODE
+      - name: Upload diagnostics even if build fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RTLab-Diagnostics
+          path: |
+            project/out/logs
+            project/out/toolchain.json
+            project/out/BUILD-STATUS.txt
+            project/_work/build-*/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 14
+      - name: Upload independent probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RTLabProbe-Windows
+          path: project/out/RTLabProbe-Windows.zip
+          if-no-files-found: ignore
+      - name: Upload Skyrim build and corresponding sources
+        if: success() && inputs.probe_only != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkyrimRTLab-Windows-and-Sources
+          path: |
+            project/out/SkyrimRTLab-Windows.zip
+            project/out/Corresponding-Source.zip
+          if-no-files-found: error
