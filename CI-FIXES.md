@@ -11,3 +11,9 @@ Die Shader werden jetzt als Bytes kopiert; nur ASCII-Include-Pfade werden normal
 Run 40571463222 bestätigt die Encoding-Korrektur: acht GI-Varianten, beide ShadowLab-DXR-Varianten und FXC-Compositing kompilieren unter Windows. Danach scheitert cs-configure, weil die flache vcpkg-Kopie die historischen Port-Trees für detours@4.0.1#8 und directx-headers@1.614.1 nicht enthält.
 
 Beide vcpkg-Repositories werden jetzt mit vollständiger Historie bis zum unveränderten Baseline-Commit geladen. Vorhandene flache Checkouts werden ohne Änderung von HEAD vervollständigt. Lokaler Git-Regressionstest bestanden: historische Trees sind danach in neuen und reparierten Checkouts verfügbar; HEAD bleibt festgelegt. Zusätzlich werden vcpkg-Manifest- und Buildtree-Logs als CI-Diagnostik gesichert. Vollständiger Windows-Build weiterhin ausstehend.
+
+## 2026-10-28: CER-PCH und Build-Reihenfolge
+
+Run 40573391088 hat CommunityShaders.dll erfolgreich gebaut und installiert. CER scheiterte im vorkompilierten Header mit Makro-Kollisionen: std::min, REX::W32::MAX_PATH und InterlockedCompareExchange. Die CER-PCH liest jetzt RE/Skyrim.h vor SKSE/SKSE.h, entsprechend dem erfolgreich gebauten CS-Host. NOMINMAX und WIN32_LEAN_AND_MEAN stehen geschützt vor allen Includes, statt erst nach Windows.h.
+
+Patch-Anwendung auf frische festgelegte Quellen, Wiederholbarkeit und der Vergleich der 27 gemeinsamen API-Deklarationen wurden lokal geprüft. Die MSVC-Bestätigung dieser Korrektur steht noch aus. CER wird jetzt vor CS kompiliert, um Backend-Fehler früher zu finden. Installiert wird weiterhin CS zuerst und CER danach, weil CS sein Installationsziel leert. Keine In-Game-Validierung.
