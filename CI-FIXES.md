@@ -17,3 +17,7 @@ Beide vcpkg-Repositories werden jetzt mit vollständiger Historie bis zum unver�
 Run 40573391088 hat CommunityShaders.dll erfolgreich gebaut und installiert. CER scheiterte im vorkompilierten Header mit Makro-Kollisionen: std::min, REX::W32::MAX_PATH und InterlockedCompareExchange. Die CER-PCH liest jetzt RE/Skyrim.h vor SKSE/SKSE.h, entsprechend dem erfolgreich gebauten CS-Host. NOMINMAX und WIN32_LEAN_AND_MEAN stehen geschützt vor allen Includes, statt erst nach Windows.h.
 
 Patch-Anwendung auf frische festgelegte Quellen, Wiederholbarkeit und der Vergleich der 27 gemeinsamen API-Deklarationen wurden lokal geprüft. Die MSVC-Bestätigung dieser Korrektur steht noch aus. CER wird jetzt vor CS kompiliert, um Backend-Fehler früher zu finden. Installiert wird weiterhin CS zuerst und CER danach, weil CS sein Installationsziel leert. Keine In-Game-Validierung.
+
+## 2026-10-28: Installationspfad für CMake
+
+Run 40672396981 bestätigt: Beide DLLs kompilieren erfolgreich, einschließlich CER mit korrigiertem PCH. cer-install scheitert anschließend an `Invalid character escape '\a'`, weil DEPLOY_DIR als Windows-Pfad mit Backslashes in cmake_install.cmake eingebettet wird. build_windows.py übergibt DEPLOY_DIR nun mit Path.as_posix(). Python-Syntax und Normalisierung eines repräsentativen Windows-Pfads wurden lokal geprüft; der lokale CMake-Reproduktionstest konnte mangels CMake-Executable nicht ausgeführt werden. Windows-Paketierung und Spieltest bleiben offen.
