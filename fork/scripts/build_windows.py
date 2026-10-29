@@ -54,6 +54,8 @@ def build():
     run('cs-build',['cmake','--build',target,'--config','Release','--target','CommunityShaders','--parallel','2'],env=env)
     dlls = list(target.rglob('CommunityShaders.dll'))
     if not dlls or any(p.read_bytes()[:2] != b'MZ' for p in dlls): raise RuntimeError('Missing/invalid CS DLL')
+    from package_windows import package
+    package(source, target, WORK, OUT, generator, run)
     (OUT / 'STATUS.txt').write_text('Host compiled. No Skyrim execution. No CER integration, no RT rendering.\n', encoding='utf-8')
 
 if __name__ == '__main__':

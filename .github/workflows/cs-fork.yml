@@ -49,7 +49,18 @@ jobs:
         with:
           name: RTLab-CS-Fork-Build-Evidence
           path: |
-            fork/out
+            fork/out/*.log
+            fork/out/*.json
+            fork/out/*.txt
             fork/_work/build-cs/CMakeFiles/CMakeConfigureLog.yaml
             fork/_work/build-cs/vcpkg-manifest-install.log
           retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FalkosLichtspiel-MO2-and-Sources
+          path: |
+            fork/out/FalkosLichtspiel-MO2.zip
+            fork/out/FalkosLichtspiel-Sources.zip
+            fork/out/SHA256.json
+          if-no-files-found: error

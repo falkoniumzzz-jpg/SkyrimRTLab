@@ -36,6 +36,100 @@ index f53d621..4bfa8b2 100644
  	if (dynamicCubemaps.loaded)
  		dynamicCubemaps.PostDeferred();
  
+diff --git a/src/Features/RemoteControl.cpp b/src/Features/RemoteControl.cpp
+index 2d25988..7d693d3 100644
+--- a/src/Features/RemoteControl.cpp
++++ b/src/Features/RemoteControl.cpp
+@@ -73,7 +73,9 @@ void RemoteControl::DataLoaded()
+ 	// DataLoaded rather than Load because devbench publishes its cross-plugin interface at
+ 	// kPostLoad — by DataLoaded it's ready. Inert (logged) when no host is present or the
+ 	// bridge was built disabled; idempotent on the devbench side (re-registering replaces).
++	#ifdef DEVBENCH_BRIDGE_ENABLED
+ 	DevBenchBridge::Install();
++	#endif
+ }
+ 
+ /**
+diff --git a/src/Menu.cpp b/src/Menu.cpp
+index 7c7b736..2bf3cce 100644
+--- a/src/Menu.cpp
++++ b/src/Menu.cpp
+@@ -772,9 +772,7 @@ void Menu::DrawSettings()
+ 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), layoutCond, ImVec2(0.5f, 0.5f));
+ 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), layoutCond);
+ 	resetLayout = false;
+-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+-	auto expectedTag = std::format("v{}", versionStr);
+-	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Community Shaders {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Community Shaders {version} [{build}]");
++	const std::string displayTitle = "FalkosLichtspiel";
+ 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
+ 	auto title = std::format("{}###CommunityShaders", displayTitle);
+ 
+diff --git a/src/Menu/HomePageRenderer.cpp b/src/Menu/HomePageRenderer.cpp
+index ea5716f..d9c69c3 100644
+--- a/src/Menu/HomePageRenderer.cpp
++++ b/src/Menu/HomePageRenderer.cpp
+@@ -63,10 +63,7 @@ void HomePageRenderer::RenderWelcomeSection()
+ 	}
+ 
+ 	ImVec2 windowSize = ImGui::GetWindowSize();
+-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+-	auto expectedTag = std::format("v{}", versionStr);
+-	auto* i18n = I18n::GetSingleton();
+-	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Community Shaders {version} [{build}]");
++	const std::string titleWithVersion = "FalkosLichtspiel";
+ 	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
+ 	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
+ 	ImGui::Text("%s", titleWithVersion.c_str());
+diff --git a/src/Menu/IconLoader.cpp b/src/Menu/IconLoader.cpp
+index 7d2dba0..ca1d804 100644
+--- a/src/Menu/IconLoader.cpp
++++ b/src/Menu/IconLoader.cpp
+@@ -91,16 +91,13 @@ namespace Util::IconLoader
+ 	std::vector<IconDefinition> GetIconDefinitions(Menu* menu)
+ 	{
+ 		const bool useMonochrome = menu->GetSettings().Theme.UseMonochromeIcons;
+-		const bool useMonochromeLogo = menu->GetSettings().Theme.UseMonochromeLogo;
+ 		const char* iconFolder = useMonochrome ? "Action Icons\\Monochrome" : "Action Icons";
+-		const char* logoPath = useMonochromeLogo ? "Community Shaders Logo\\Monochrome\\cs-logo.png" : "Community Shaders Logo\\cs-logo.png";
+ 
+ 		return {
+ 			{ std::string(iconFolder) + "\\save-settings.png", &menu->uiIcons.saveSettings.texture, &menu->uiIcons.saveSettings.size },
+ 			{ std::string(iconFolder) + "\\load-settings.png", &menu->uiIcons.loadSettings.texture, &menu->uiIcons.loadSettings.size },
+ 			{ std::string(iconFolder) + "\\clear-cache.png", &menu->uiIcons.clearCache.texture, &menu->uiIcons.clearCache.size },
+ 			{ std::string(iconFolder) + "\\delete.png", &menu->uiIcons.deleteSettings.texture, &menu->uiIcons.deleteSettings.size },
+-			{ logoPath, &menu->uiIcons.logo.texture, &menu->uiIcons.logo.size },
+ 			{ std::string(iconFolder) + "\\restore-settings.png", &menu->uiIcons.featureSettingRevert.texture, &menu->uiIcons.featureSettingRevert.size },
+ 			{ std::string(iconFolder) + "\\discord.png", &menu->uiIcons.discord.texture, &menu->uiIcons.discord.size },
+ 			{ std::string(iconFolder) + "\\apply-to-game.png", &menu->uiIcons.applyToGame.texture, &menu->uiIcons.applyToGame.size },
+diff --git a/src/Menu/MenuHeaderRenderer.cpp b/src/Menu/MenuHeaderRenderer.cpp
+index 7b564eb..494b6f8 100644
+--- a/src/Menu/MenuHeaderRenderer.cpp
++++ b/src/Menu/MenuHeaderRenderer.cpp
+@@ -24,9 +24,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
+ 		return;
+ 	}
+ 
+-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+-	auto expectedTag = std::format("v{}", versionStr);
+-	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Community Shaders {}", versionStr) : std::format("Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
++	const std::string title = "FalkosLichtspiel";
+ 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
+ 
+ 	if (isDocked) {
+diff --git a/src/Menu/OverlayRenderer.cpp b/src/Menu/OverlayRenderer.cpp
+index 0e1c41f..49bcc83 100644
+--- a/src/Menu/OverlayRenderer.cpp
++++ b/src/Menu/OverlayRenderer.cpp
+@@ -30,7 +30,7 @@ namespace
+ 	std::unordered_map<ImGuiID, float> s_windowOverlapAlpha;
+ 
+ 	constexpr ImGuiWindowFlags SKIP_WINDOW_FLAGS = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
+-	constexpr const char* MAIN_WINDOW_PREFIX = "Community Shaders";
++	constexpr const char* MAIN_WINDOW_PREFIX = "FalkosLichtspiel";
+ 
+ 	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strncmp(win->Name, MAIN_WINDOW_PREFIX, strlen(MAIN_WINDOW_PREFIX)) == 0; }
+ 
 diff --git a/src/State.cpp b/src/State.cpp
 index f5d81e8..4203840 100644
 --- a/src/State.cpp
