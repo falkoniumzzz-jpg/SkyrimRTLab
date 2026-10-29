@@ -8,13 +8,15 @@ permissions:
   contents: read
 concurrency:
   group: cs-fork-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   bridge:
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Test streaming build diagnostics
+        run: python fork/tests/test_process_log.py
       - name: Configure standalone bridge
         run: cmake -S fork -B fork/build -A x64
       - name: Compile module and tests

@@ -6,16 +6,13 @@ from pathlib import Path
 import subprocess
 import traceback
 from prepare import ROOT, LOCK, prepare
+from process_log import run_logged
 
 WORK = ROOT / '_work'
 OUT = ROOT / 'out'
 
 def run(label, command, cwd=None, env=None):
-    print(label, flush=True)
-    with (OUT / (label + '.log')).open('w', encoding='utf-8') as log:
-        p = subprocess.run([str(x) for x in command], cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
-    if p.returncode:
-        raise RuntimeError(f'{label} failed with exit code {p.returncode}; see {label}.log')
+    run_logged(label, command, OUT, cwd=cwd, env=env)
 
 def build():
     if os.name != 'nt': raise RuntimeError('Full host requires Windows/MSVC')
