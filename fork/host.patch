@@ -1,0 +1,65 @@
+diff --git a/cmake/XSEPlugin.cmake b/cmake/XSEPlugin.cmake
+index 233b474..aa22e98 100644
+--- a/cmake/XSEPlugin.cmake
++++ b/cmake/XSEPlugin.cmake
+@@ -47,8 +47,8 @@ if(NOT DEFINED CACHE{CMAKE_INTERPROCEDURAL_OPTIMIZATION})
+ endif()
+ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
+ 
+-set(COMMONLIB_PREBUILT ON CACHE BOOL "Use prebuilt CommonLibSSE" FORCE)
+-set(COMMONLIB_PREBUILT_MULTICONFIG ON CACHE BOOL "Use prebuilt CommonLibSSE in multi-config generators" FORCE)
++set(COMMONLIB_PREBUILT ON CACHE BOOL "Use prebuilt CommonLibSSE")
++set(COMMONLIB_PREBUILT_MULTICONFIG ON CACHE BOOL "Use prebuilt CommonLibSSE in multi-config generators")
+ 
+ set(Boost_USE_STATIC_LIBS ON)
+ set(Boost_USE_STATIC_RUNTIME ON)
+diff --git a/src/Deferred.cpp b/src/Deferred.cpp
+index f53d621..4bfa8b2 100644
+--- a/src/Deferred.cpp
++++ b/src/Deferred.cpp
+@@ -1,4 +1,5 @@
+ #include "Deferred.h"
++#include "RTLab/RTLabHost.h"
+ 
+ #include <DDSTextureLoader.h>
+ 
+@@ -399,6 +400,12 @@ void Deferred::DeferredPasses()
+ 		context->CSSetShader(nullptr, nullptr, 0);
+ 	}
+ 
++	if (RTLabHost::Active()) {
++		RTLabHost::Observe(globals::state->frameCount, interior,
++			Util::GetCurrentSceneDepthSRV(false), normalRoughness.SRV,
++			albedo.SRV, reflectance.SRV, motionVectors.SRV, main.SRV);
++	}
++
+ 	if (dynamicCubemaps.loaded)
+ 		dynamicCubemaps.PostDeferred();
+ 
+diff --git a/src/State.cpp b/src/State.cpp
+index f5d81e8..4203840 100644
+--- a/src/State.cpp
++++ b/src/State.cpp
+@@ -1,4 +1,5 @@
+ #include "State.h"
++#include "RTLab/RTLabHost.h"
+ 
+ #include <codecvt>
+ 
+@@ -258,6 +259,8 @@ void State::Reset()
+ 	lastPixelDescriptor = 0;
+ 	lastVertexDescriptor = 0;
+ 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
++	if (isLoadingMenuOpen || isMainMenuOpen)
++		RTLabHost::Invalidate();
+ 	frameCount++;
+ 	// Publish for off-thread readers (e.g. the MCP listener thread).
+ 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
+@@ -831,6 +834,7 @@ void State::CheckTypedUAVLoadSupport()
+ 
+ void State::SetupResources()
+ {
++	RTLabHost::Invalidate();
+ 	for (auto& c : drawCalls)
+ 		c = 0;
+ 	for (auto& c : smoothDrawCalls)

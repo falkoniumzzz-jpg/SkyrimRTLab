@@ -1,0 +1,6 @@
+{
+  "cs": {"url":"https://github.com/community-shaders/skyrim-community-shaders.git", "commit":"5db085e77951b84bd6c191ff5b06d56893f08286", "version":"1.9.0", "vcpkg":"dddca6fa87f177e0678e2545c4b4636a44aa05bd"},
+  "legacy": {"repository":"falkoniumzzz-jpg/SkyrimRTLab", "commit":"8c45fda4650120141bfc9028607658c2b5a8193b", "successful_run":40687353054, "cer":"09350844e63f602a3b788f1c815d29cee1b4fab2"},
+  "stage":"host-observer-only",
+  "abi":65536
+}

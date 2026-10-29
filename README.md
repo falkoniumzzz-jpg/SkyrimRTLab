@@ -1,26 +1,11 @@
 # SkyrimRTLab
 
-Experimentelles Skyrim-RT-Quellpaket v2 mit reproduzierbarem Windows-Build.
+Dieser Entwicklungszweig bereitet einen eigenen Fork von **Community Shaders 1.9.0**
+mit separat angebundenem RT-Modul vor. Einstieg: [fork/README_DE.md](fork/README_DE.md).
 
-## Windows-Build starten
+Implementiert ist zunächst der überprüfbare Host-/DLL-Diagnosepfad; die Übernahme der
+CER-Szenen- und GI-Pipeline steht noch aus. Das ist kein neues fertiges RT-Modpaket.
 
-1. Oben **Actions** öffnen.
-2. **Skyrim RT Lab Windows build** auswählen.
-3. **Run workflow** öffnen, Branch **main** lassen, **probe_only** nicht aktivieren.
-4. Mit **Run workflow** starten.
-
-Die Dateien sind bereits hochgeladen. Es ist kein manueller Upload oder Entpacken erforderlich.
-
-## Aktueller Stand
-
-Der vollständige Windows-/Skyrim-Build ist noch nicht erfolgreich validiert. Lokal wurden die unabhängige DXR-Probe cross-kompiliert und acht GI-Shader-Varianten kompiliert. Keine Validierung im Spiel und keine gemessenen Performanceverbesserungen. Dieses Paket benötigt weiterhin das festgelegte experimentelle Community-Shaders/CER-Paar; es ist noch kein eigenständiges RT-Plugin für die öffentliche Community-Shaders-Version.
-
-Details und Grenzen: [ERGEBNIS_V2.md](ERGEBNIS_V2.md).
-
-## Build-Ausgaben
-
-- **RTLab-Diagnostics**: Logs, auch bei fehlgeschlagenem Build.
-- **RTLabProbe-Windows**: unabhängiger DXR-Test, falls erfolgreich erstellt.
-- **SkyrimRTLab-Windows-and-Sources**: Skyrim-Paket und zugehöriger Quellcode, nur bei erfolgreichem vollständigem Build.
-
-Bestehende funktionierende Installation nicht überschreiben; später in einem separaten MO2-Testprofil prüfen.
+Das bereits erfolgreich gebaute v2-Testpaket und sein Workflow bleiben auf `main`
+unverändert. Es basiert weiterhin auf dem älteren experimentellen CS/CER-Paar.
+Die alten DLLs nicht mit diesem Entwicklungszweig mischen.
