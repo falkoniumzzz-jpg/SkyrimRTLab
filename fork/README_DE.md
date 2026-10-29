@@ -1,3 +1,9 @@
+# FalkosLichtspiel auf Jiayes pp-Basis
+
+Aktueller Integrationsstand: [JIAYE_INTEGRATION.md](JIAYE_INTEGRATION.md).
+
+Die folgende Beschreibung dokumentiert den vorherigen offiziellen CS-Host.
+
 # RTLab: eigener CS-Fork, Entwicklungsstufe 0.1
 
 Stand: 29.10.2026. Basis: offizielles CS **1.9.0**, Commit

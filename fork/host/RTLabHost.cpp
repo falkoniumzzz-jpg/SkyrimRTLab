@@ -48,7 +48,7 @@ namespace {
             return;
         }
         module = candidate;
-        Log("CS 1.9.0 RTLab host active: diagnostic observer only; no RT rendering.");
+        Log("FalkosLichtspiel / Community Shaders 1.9.0 + Jiaye pp host active: diagnostic observer only; no RT rendering.");
     }
 }
 namespace RTLabHost {

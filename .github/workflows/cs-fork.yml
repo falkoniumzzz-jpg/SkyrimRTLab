@@ -1,8 +1,8 @@
-name: RTLab CS fork validation
+name: FalkosLichtspiel Jiaye build
 on:
   workflow_dispatch:
   push:
-    branches: ['dev/cs-1.9-rt-host']
+    branches: ['dev/falkoslichtspiel-jiaye']
     paths: ['fork/**', '.github/workflows/cs-fork.yml']
 permissions:
   contents: read
@@ -42,7 +42,7 @@ jobs:
           python-version: '3.12'
       - name: Install build tools
         run: python -m pip install cmake==4.2.3 ninja
-      - name: Compile patched CS 1.9.0 host
+      - name: Compile FalkosLichtspiel with Jiaye stack
         run: python fork/scripts/build_windows.py
       - uses: actions/upload-artifact@v4
         if: always()

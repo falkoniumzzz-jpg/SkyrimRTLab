@@ -1,11 +1,10 @@
-# SkyrimRTLab
+# FalkosLichtspiel — Jiaye integration
 
-Dieser Entwicklungszweig bereitet einen eigenen Fork von **Community Shaders 1.9.0**
-mit separat angebundenem RT-Modul vor. Einstieg: [fork/README_DE.md](fork/README_DE.md).
+This branch integrates FalkosLichtspiel with Jiaye's pinned CS 1.9 pp snapshot.
+It carries the requested SSGI, material/Fresnel, lighting and rain implementations
+as part of the coherent upstream raster stack, including their dependencies.
 
-Implementiert ist zunächst der überprüfbare Host-/DLL-Diagnosepfad; die Übernahme der
-CER-Szenen- und GI-Pipeline steht noch aus. Das ist kein neues fertiges RT-Modpaket.
-
-Das bereits erfolgreich gebaute v2-Testpaket und sein Workflow bleiben auf `main`
-unverändert. Es basiert weiterhin auf dem älteren experimentellen CS/CER-Paar.
-Die alten DLLs nicht mit diesem Entwicklungszweig mischen.
+Details: [fork/JIAYE_INTEGRATION.md](fork/JIAYE_INTEGRATION.md).
+Install instructions: [fork/INSTALL_FALKOSLICHTSPIEL.md](fork/INSTALL_FALKOSLICHTSPIEL.md).
+Windows compilation and the MO2 artifact must pass CI before installation.
+Hardware RT/CER is not integrated in this variant yet.

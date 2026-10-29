@@ -1,6 +1,6 @@
 # FalkosLichtspiel – Entwicklungsbuild
 
-Eigenständiger CS-1.9-Fork mit Diagnose-Anbindung, noch OHNE portiertes Hardware-RT.
+Eigenständiger CS-1.9-Fork auf Jiayes pp-Basis mit SSGI, Beleuchtungs-/Materialänderungen, Rain Refraction und Diagnose-Anbindung, noch OHNE portiertes Hardware-RT.
 Die sichtbare Menübezeichnung lautet FalkosLichtspiel.
 Basiert auf Community Shaders 1.9.0; Copyright und Lizenz der ursprünglichen Autoren bleiben erhalten.
 

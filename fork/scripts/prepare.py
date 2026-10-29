@@ -35,7 +35,7 @@ def prepare(source):
         return result
 
     # Exact content check prevents accepting a partially modified or unrelated patch.
-    for filename in ('cmake/XSEPlugin.cmake', 'src/Deferred.cpp', 'src/Features/RemoteControl.cpp', 'src/Menu.cpp', 'src/Menu/HomePageRenderer.cpp', 'src/Menu/IconLoader.cpp', 'src/Menu/MenuHeaderRenderer.cpp', 'src/Menu/OverlayRenderer.cpp', 'src/State.cpp'):
+    for filename in ('cmake/XSEPlugin.cmake', 'package/SKSE/Plugins/CommunityShaders/Translations/en.json', 'src/Deferred.cpp', 'src/Features/RemoteControl.cpp', 'src/Menu.cpp', 'src/Menu/HomePageRenderer.cpp', 'src/Menu/IconLoader.cpp', 'src/Menu/MenuHeaderRenderer.cpp', 'src/Menu/OverlayRenderer.cpp', 'src/State.cpp'):
         original = subprocess.check_output(['git','show',f'HEAD:{filename}'], cwd=source)
         current = (source / filename).read_bytes()
         if current != original:
@@ -46,12 +46,12 @@ def prepare(source):
             import tempfile
             with tempfile.TemporaryDirectory() as temp:
                 temp = Path(temp)
-                for name in ('cmake/XSEPlugin.cmake', 'src/Deferred.cpp', 'src/Features/RemoteControl.cpp', 'src/Menu.cpp', 'src/Menu/HomePageRenderer.cpp', 'src/Menu/IconLoader.cpp', 'src/Menu/MenuHeaderRenderer.cpp', 'src/Menu/OverlayRenderer.cpp', 'src/State.cpp'):
+                for name in ('cmake/XSEPlugin.cmake', 'package/SKSE/Plugins/CommunityShaders/Translations/en.json', 'src/Deferred.cpp', 'src/Features/RemoteControl.cpp', 'src/Menu.cpp', 'src/Menu/HomePageRenderer.cpp', 'src/Menu/IconLoader.cpp', 'src/Menu/MenuHeaderRenderer.cpp', 'src/Menu/OverlayRenderer.cpp', 'src/State.cpp'):
                     target = temp / name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes((source / name).read_bytes())
                 apply(temp, '--reverse').check_returncode()
-                for name in ('cmake/XSEPlugin.cmake', 'src/Deferred.cpp', 'src/Features/RemoteControl.cpp', 'src/Menu.cpp', 'src/Menu/HomePageRenderer.cpp', 'src/Menu/IconLoader.cpp', 'src/Menu/MenuHeaderRenderer.cpp', 'src/Menu/OverlayRenderer.cpp', 'src/State.cpp'):
+                for name in ('cmake/XSEPlugin.cmake', 'package/SKSE/Plugins/CommunityShaders/Translations/en.json', 'src/Deferred.cpp', 'src/Features/RemoteControl.cpp', 'src/Menu.cpp', 'src/Menu/HomePageRenderer.cpp', 'src/Menu/IconLoader.cpp', 'src/Menu/MenuHeaderRenderer.cpp', 'src/Menu/OverlayRenderer.cpp', 'src/State.cpp'):
                     pristine = subprocess.check_output(['git','show',f'HEAD:{name}'], cwd=source)
                     if (temp / name).read_bytes() != pristine:
                         raise RuntimeError(f'Unrelated edits in {name}; use a separate checkout')
