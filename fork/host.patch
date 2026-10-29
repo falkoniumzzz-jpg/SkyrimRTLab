@@ -76,10 +76,10 @@ index 82672d3..4646365 100644
  	auto title = std::format("{}###CommunityShaders", displayTitle);
  
 diff --git a/src/Menu/HomePageRenderer.cpp b/src/Menu/HomePageRenderer.cpp
-index e364d2e..819d5d9 100644
+index e364d2e..8dd5803 100644
 --- a/src/Menu/HomePageRenderer.cpp
 +++ b/src/Menu/HomePageRenderer.cpp
-@@ -54,10 +54,7 @@ void HomePageRenderer::RenderWelcomeSection()
+@@ -54,10 +54,9 @@ void HomePageRenderer::RenderWelcomeSection()
  	}
  
  	ImVec2 windowSize = ImGui::GetWindowSize();
@@ -87,11 +87,13 @@ index e364d2e..819d5d9 100644
 -	auto expectedTag = std::format("v{}", versionStr);
 -	auto* i18n = I18n::GetSingleton();
 -	std::string titleWithVersion = i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}");
++	const auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
++	const auto expectedTag = std::format("v{}", versionStr);
 +	const std::string titleWithVersion = "FalkosLichtspiel";
  	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
  	ImGui::SetCursorPosX(std::max((windowSize.x - titleSize.x) * 0.5f, ImGui::GetCursorPosX()));
  	ImGui::TextWrapped("%s", titleWithVersion.c_str());
-@@ -78,6 +75,8 @@ void HomePageRenderer::RenderWelcomeSection()
+@@ -78,6 +77,8 @@ void HomePageRenderer::RenderWelcomeSection()
  
  	ImGui::Spacing();
  
@@ -122,16 +124,18 @@ index 0f0d406..ec4329f 100644
  			{ std::string(iconFolder) + "\\discord.png", &icons.discord.texture, &icons.discord.size },
  			{ std::string(iconFolder) + "\\apply-to-game.png", &icons.applyToGame.texture, &icons.applyToGame.size },
 diff --git a/src/Menu/MenuHeaderRenderer.cpp b/src/Menu/MenuHeaderRenderer.cpp
-index c34f134..0fea5e7 100644
+index c34f134..6ef8f2b 100644
 --- a/src/Menu/MenuHeaderRenderer.cpp
 +++ b/src/Menu/MenuHeaderRenderer.cpp
-@@ -26,9 +26,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
+@@ -26,9 +26,9 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
  		return;
  	}
  
 -	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
 -	auto expectedTag = std::format("v{}", versionStr);
 -	auto title = std::format("Community Shaders {}", versionStr);
++	const auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
++	const auto expectedTag = std::format("v{}", versionStr);
 +	const std::string title = "FalkosLichtspiel";
  	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
  

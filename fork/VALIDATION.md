@@ -11,3 +11,16 @@
   CS checkout with core.autocrlf=false. Regression: CRLF patch applied to fresh pinned
   source, reapplied, and checked for unrelated-edit rejection locally.
 - Full CS host MSVC result still pending the next run. No Skyrim or hardware DXR run.
+
+## 2026-10-30 — Jiaye integration menu build fix
+
+Run 40956791934: standalone bridge compilation and both CTest cases passed.
+The full host configured successfully, then MSVC reported C2065 for expectedTag in
+HomePageRenderer.cpp. Branding had removed a local variable still used by Jiaye's
+separate build-label display. Source review found the same surviving reference in
+MenuHeaderRenderer.cpp. Restore local versionStr/expectedTag in both functions;
+retain FalkosLichtspiel as the visible title. No lighting shader changes in this fix.
+
+Local verification: updated patch applies to pristine files from the locked Jiaye
+commit; repeated application yields the same manifest; unrelated edits are rejected
+and preserved; git diff --check and Python syntax checks pass. MSVC rerun is required.
