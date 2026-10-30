@@ -1,0 +1,77 @@
+name: FalkosLichtspiel RT experiment
+on:
+  workflow_dispatch:
+  push:
+    branches: ['dev/falkoslichtspiel-rt']
+    paths: ['legacy/**', 'RT_EXPERIMENT.md', '.github/workflows/rt-experiment.yml']
+permissions:
+  contents: read
+concurrency:
+  group: falkoslichtspiel-rt-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  PYTHONUTF8: '1'
+  GIT_LFS_SKIP_SMUDGE: '1'
+  VCPKG_DISABLE_METRICS: '1'
+jobs:
+  shaders:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check ordered DLL contract tests
+        run: python legacy/tests/test_contract.py
+      - name: Prepare pinned native DXR host and backend
+        run: python legacy/scripts/prepare_sources.py --skip-submodules
+      - name: Fetch pinned RTXDI shader headers
+        run: git -C legacy/_work/cer submodule update --init --depth 1 extern/RTXDI-Library
+      - name: Fetch and verify pinned DXC
+        working-directory: legacy/scripts
+        run: python -c "from common import OUT; OUT.mkdir(exist_ok=True); from build_windows import tools; tools()"
+      - name: Compile original GI denoiser variants
+        run: python legacy/scripts/check_gi_shaders.py --cer legacy/_work/cer --dxc legacy/_work/dxc/bin/x64/dxc.exe
+      - name: Compile RR and ReSTIR producers and consumers
+        run: python legacy/scripts/check_rt_shaders.py --cer legacy/_work/cer --dxc legacy/_work/dxc/bin/x64/dxc.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FalkosLichtspiel-RT-Shader-Evidence
+          path: |
+            legacy/out/logs
+            legacy/out/*PASSED.txt
+          retention-days: 14
+  windows:
+    needs: shaders
+    runs-on: windows-2025
+    timeout-minutes: 180
+    env:
+      VCPKG_BINARY_SOURCES: clear
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: python -m pip install cmake==4.2.3 ninja
+      - name: Build paired CS and CER DLLs and MO2 package
+        run: python legacy/scripts/build_windows.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FalkosLichtspiel-RT-Build-Evidence
+          path: |
+            legacy/out/logs
+            legacy/out/*.txt
+            legacy/out/*.json
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FalkosLichtspiel-RT-MO2-and-Sources
+          path: |
+            legacy/out/FalkosLichtspiel-RT-MO2.zip
+            legacy/out/Corresponding-Source.zip
+          if-no-files-found: error

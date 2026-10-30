@@ -1,0 +1,139 @@
+diff --git a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
+index 5d1659b..1a16b20 100644
+--- a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
++++ b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
+@@ -86,7 +86,12 @@ void Main()
+     
+     const float2 dynamicUVUnjittered = dynamicUV - (Camera.Jitter / Camera.ScreenSize);
+ 
+-    const float depth = Depth.SampleLevel(DefaultSampler, dynamicUVUnjittered, 0);
++    // Depth is a surface identity, not a filterable color. Clamp jitter at the border.
++    uint depthWidth, depthHeight;
++    Depth.GetDimensions(depthWidth, depthHeight);
++    int2 depthPixel = clamp(int2(floor(dynamicUVUnjittered * float2(depthWidth, depthHeight))),
++        int2(0, 0), int2(depthWidth, depthHeight) - 1);
++    const float depth = Depth.Load(int3(depthPixel, 0));
+     
+     const float depthVS = ScreenToViewDepth(depth, Camera.CameraData);
+ 
+@@ -192,6 +197,10 @@ void Main()
+     SharcHitData sharcHitData;
+ #endif    
+     
++#if defined(RAW_RADIANCE) && !defined(NRD)
++    float diffHitDist = 0.0f;
++    float specHitDist = 0.0f;
++#endif
+ #if defined(NRD)
+      float diffHitDist = 0.0f;
+      uint diffPathNum = 0;
+@@ -210,7 +219,7 @@ void Main()
+         bsdf = sourceBSDF;
+         rayCone = sourceRayCone; 
+ 
+-#if defined(NRD)
++#if defined(NRD) || defined(RAW_RADIANCE)
+         float accumulatedHitDist = 0;
+ #endif
+ 
+@@ -374,7 +383,7 @@ void Main()
+                 break;
+             }
+             
+-#if defined(NRD)
++#if defined(NRD) || defined(RAW_RADIANCE)
+             if (j == 0)
+                 accumulatedHitDist = payload.hitDistance;
+ #endif                      
+@@ -496,6 +505,11 @@ void Main()
+         }
+ #endif
+         
++#if defined(RAW_RADIANCE) && !defined(NRD)
++        // Raw first-hit distances in game units; this is not NRD normalized distance.
++        if (isSpecularSample) specHitDist += accumulatedHitDist / MAX_SAMPLES;
++        else diffHitDist += accumulatedHitDist / MAX_SAMPLES;
++#endif
+ #if defined(RAW_RADIANCE)
+         if (isSpecularSample)
+             specularRadiance += sampleRadiance;
+diff --git a/src/Pass/NRD/NRDIntegration.cpp b/src/Pass/NRD/NRDIntegration.cpp
+index 48392df..ad6e6b6 100644
+--- a/src/Pass/NRD/NRDIntegration.cpp
++++ b/src/Pass/NRD/NRDIntegration.cpp
+@@ -100,6 +100,8 @@ namespace Pass::NRD
+ 
+ 	void NRDIntegration::Initialize()
+ 	{
++        Setup();
++        if (!m_NRD) return;
+ 		CreateBindingLayouts();
+ 		CreatePipelines();
+ 		CreateResources();
+@@ -252,6 +254,7 @@ namespace Pass::NRD
+ 
+ 	void NRDIntegration::CreateResources()
+ 	{
++        m_ResetHistory = true;
+ 		if (!m_NRD)
+ 			return;
+ 
+@@ -368,12 +371,14 @@ namespace Pass::NRD
+ 
+ 	void NRDIntegration::SettingsChanged(const Settings& settings)
+ 	{
++        const bool wasEnabled = m_Enabled;
+ 		if (IsRelax())
+ 			m_Enabled = (settings.GeneralSettings.Denoiser == Denoiser::NRD_Relax);
+ 		else
+ 			m_Enabled = (settings.GeneralSettings.Denoiser == Denoiser::NRD_Reblur);
+ 
+ 		UpdateSettings(settings);
++        if (wasEnabled != m_Enabled) m_ResetHistory = true;
+ 	}
+ 
+ 	void NRDIntegration::UpdateSettings(const Settings& settings)
+@@ -614,7 +619,20 @@ namespace Pass::NRD
+ 			m_SettingsDirty = false;
+ 		}
+ 
+-		UpdateCommonSettings();
++        UpdateCommonSettings();
++        const bool resetHistory = m_ResetHistory ||
++            m_CommonSettings.frameIndex != static_cast<uint32_t>(m_LastHistoryFrame + 1u);
++        m_CommonSettings.accumulationMode = resetHistory ?
++            nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
++        if (resetHistory) {
++            // Previous matrices/sizes are not meaningful for new history textures.
++            std::memcpy(m_CommonSettings.worldToViewMatrixPrev, m_CommonSettings.worldToViewMatrix, sizeof(float4x4));
++            std::memcpy(m_CommonSettings.viewToClipMatrixPrev, m_CommonSettings.viewToClipMatrix, sizeof(float4x4));
++            std::memcpy(m_CommonSettings.resourceSizePrev, m_CommonSettings.resourceSize, sizeof(m_CommonSettings.resourceSize));
++            std::memcpy(m_CommonSettings.rectSizePrev, m_CommonSettings.rectSize, sizeof(m_CommonSettings.rectSize));
++            std::memcpy(m_CommonSettings.cameraJitterPrev, m_CommonSettings.cameraJitter, sizeof(m_CommonSettings.cameraJitter));
++            logger::info("RTLab NRD history reset: frame={}, resources={}", m_CommonSettings.frameIndex, m_ResetHistory);
++        }
+ 
+ 		const nrd::Result commonSettingsResult = nrd::SetCommonSettings(*m_NRD, m_CommonSettings);
+ 		if (commonSettingsResult != nrd::Result::SUCCESS) {
+@@ -750,5 +768,8 @@ namespace Pass::NRD
+ 
+ 			commandList->endMarker();
+ 		}
++        // Only advance history after all dispatches have been recorded successfully.
++        m_ResetHistory = false;
++        m_LastHistoryFrame = m_CommonSettings.frameIndex;
+ 	}
+ }
+diff --git a/src/Pass/NRD/NRDIntegration.h b/src/Pass/NRD/NRDIntegration.h
+index 4ffd080..974eff2 100644
+--- a/src/Pass/NRD/NRDIntegration.h
++++ b/src/Pass/NRD/NRDIntegration.h
+@@ -55,6 +55,8 @@ namespace Pass::NRD
+ 		eastl::vector<DispatchBindingCache> m_DispatchBindingCaches;
+ 
+ 		bool m_ResourcesDirty = true;
++        bool m_ResetHistory = true;
++        uint32_t m_LastHistoryFrame = 0;
+ 		bool m_SettingsDirty = true;
+ 
+ 		void Setup();

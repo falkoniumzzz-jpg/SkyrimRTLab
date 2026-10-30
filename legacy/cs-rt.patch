@@ -1,0 +1,101 @@
+diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
+--- a/src/Features/Raytracing.cpp
++++ b/src/Features/Raytracing.cpp
+@@ -621,6 +621,7 @@
+ 	ImGui::PushID("ReSTIRGISettings");
+ 
+ 	auto& giSettings = settings.CreationEngineRaytracingSettings.ReSTIRGI;
++    ImGui::TextWrapped("Experimental RTGI resampling: RR or None only, opaque rough surfaces. NRD keeps its original GI path. PT requires Stable Planes.");
+ 
+ 	ImGui::Checkbox(T(TKEY("restir_enabled"), "Enabled"), &giSettings.Enabled);
+ 
+@@ -1430,6 +1431,11 @@
+ 	if (!settings.CreationEngineRaytracingSettings.Enabled || Mode() == CreationEngineRaytracing::Mode::None)
+ 		return;
+ 
++    float2 currentSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
++    auto currentDynamicSize = Util::ConvertToDynamic(currentSize);
++    screenData->Resolution = { static_cast<uint>(currentSize.x), static_cast<uint>(currentSize.y) };
++    screenData->DynamicResolution = { static_cast<uint>(currentDynamicSize.x), static_cast<uint>(currentDynamicSize.y) };
++    screenCB->Update(screenData.get(), sizeof(ScreenData));
+ 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination)
+ 		ConvertTextures();
+ 
+diff --git a/src/Features/Upscaling/Streamline.cpp b/src/Features/Upscaling/Streamline.cpp
+--- a/src/Features/Upscaling/Streamline.cpp
++++ b/src/Features/Upscaling/Streamline.cpp
+@@ -400,7 +400,25 @@
+ 	auto& upscaling = globals::features::upscaling;
+ 	auto jitter = upscaling.jitter;
+ 	slConstants.jitterOffset = { -jitter.x, -jitter.y };
+-	slConstants.reset = sl::Boolean::eFalse;
++    const auto& rtSettings = globals::features::raytracing.settings.CreationEngineRaytracingSettings;
++    static auto previousRTSettings = rtSettings;
++    static uint32_t previousFrame = 0;
++    static uint32_t previousWidth = 0, previousHeight = 0;
++    static bool hasHistory = false;
++    const uint32_t frame = globals::state->frameCount;
++    const uint32_t width = globals::game::graphicsState->screenWidth;
++    const uint32_t height = globals::game::graphicsState->screenHeight;
++    bool reset = !hasHistory || previousRTSettings != rtSettings ||
++        (frame != previousFrame && frame != previousFrame + 1u) ||
++        width != previousWidth || height != previousHeight;
++    if (auto* ui = RE::UI::GetSingleton())
++        reset = reset || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
++    slConstants.reset = reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
++    previousRTSettings = rtSettings;
++    previousFrame = frame;
++    previousWidth = width;
++    previousHeight = height;
++    hasHistory = true;
+ 
+ 	slConstants.mvecScale = { 1.0f, 1.0f };
+ 	slConstants.motionVectors3D = sl::Boolean::eFalse;
+diff --git a/src/Menu.cpp b/src/Menu.cpp
+--- a/src/Menu.cpp
++++ b/src/Menu.cpp
+@@ -765,7 +765,7 @@
+ 	resetLayout = false;
+ 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+ 	auto expectedTag = std::format("v{}", versionStr);
+-	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Community Shaders {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Community Shaders {version} [{build}]");
++	std::string displayTitle = "FalkosLichtspiel RT";
+ 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
+ 	auto title = std::format("{}###CommunityShaders", displayTitle);
+ 
+diff --git a/src/Menu/HomePageRenderer.cpp b/src/Menu/HomePageRenderer.cpp
+--- a/src/Menu/HomePageRenderer.cpp
++++ b/src/Menu/HomePageRenderer.cpp
+@@ -68,7 +68,7 @@
+ 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+ 	auto expectedTag = std::format("v{}", versionStr);
+ 	auto* i18n = I18n::GetSingleton();
+-	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Community Shaders {version} [{build}]");
++	std::string titleWithVersion = "Welcome to FalkosLichtspiel RT";
+ 	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
+ 	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
+ 	ImGui::Text("%s", titleWithVersion.c_str());
+diff --git a/src/Menu/MenuHeaderRenderer.cpp b/src/Menu/MenuHeaderRenderer.cpp
+--- a/src/Menu/MenuHeaderRenderer.cpp
++++ b/src/Menu/MenuHeaderRenderer.cpp
+@@ -26,7 +26,7 @@
+ 
+ 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+ 	auto expectedTag = std::format("v{}", versionStr);
+-	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Community Shaders {}", versionStr) : std::format("Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
++	std::string title = "FalkosLichtspiel RT";
+ 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
+ 
+ 	if (isDocked) {
+diff --git a/src/Menu/OverlayRenderer.cpp b/src/Menu/OverlayRenderer.cpp
+--- a/src/Menu/OverlayRenderer.cpp
++++ b/src/Menu/OverlayRenderer.cpp
+@@ -29,7 +29,7 @@
+ 	std::unordered_map<ImGuiID, float> s_windowOverlapAlpha;
+ 
+ 	constexpr ImGuiWindowFlags SKIP_WINDOW_FLAGS = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
+-	constexpr const char* MAIN_WINDOW_PREFIX = "Community Shaders";
++	constexpr const char* MAIN_WINDOW_PREFIX = "FalkosLichtspiel RT";
+ 
+ 	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strncmp(win->Name, MAIN_WINDOW_PREFIX, strlen(MAIN_WINDOW_PREFIX)) == 0; }
+ 

@@ -1,0 +1,492 @@
+diff --git a/interop/PackedSurfaceData.hlsli b/interop/PackedSurfaceData.hlsli
+--- a/interop/PackedSurfaceData.hlsli
++++ b/interop/PackedSurfaceData.hlsli
+@@ -133,7 +133,7 @@
+     uint materialFeature, bool hasSpecularTransmission,
+     float viewDepth)
+ {
+-    PackedSurfaceData d;
++    PackedSurfaceData d = (PackedSurfaceData)0;
+     d.posW             = position;
+     d.packedNormal     = PSD_PackOct(normal);
+     d.packedTangent    = PSD_PackOct(tangent);
+diff --git a/interop/ReSTIRGIData.hlsli b/interop/ReSTIRGIData.hlsli
+--- a/interop/ReSTIRGIData.hlsli
++++ b/interop/ReSTIRGIData.hlsli
+@@ -10,6 +10,10 @@
+ {
+     RTXDI_GIParameters giParams;
+     RTXDI_RuntimeParameters runtimeParams;
++    uint resetHistory;
++    uint historyPad0;
++    uint historyPad1;
++    uint historyPad2;
+ };
+ 
+ #endif // RESTIRGIDATA_HLSLI
+diff --git a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
+--- a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
++++ b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
+@@ -78,6 +78,20 @@
+ 
+ #endif    
+     
++#if defined(DLSS_RR) && !SHARC_UPDATE
++    RRHitDistance[idx] = 0;
++    float rrDistanceSum = 0;
++    uint rrDistanceCount = 0;
++    bool rrSpecularSample = false;
++#endif
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++    uint surfaceIndex = (Camera.FrameIndex % 2) * (Camera.RenderSize.x * Camera.RenderSize.y)
++        + idx.y * Camera.RenderSize.x + idx.x;
++    GISurfaces[surfaceIndex] = PSD_Empty();
++    GISecondaryPositionNormal[idx] = 0;
++    GISecondaryRadiance[idx] = 0;
++    GIOriginalContribution[idx] = 0;
++#endif
+     const float2 uv = float2(idx + 0.5f) / size;
+ 
+     // If the game has dynamic resolution enabled the textures will not cover the entire extent
+@@ -155,7 +169,20 @@
+     Surface sourceSurface = SurfaceMaker::make(positionWS, faceNormal, normalWS, tangentWS, bitangentWS, albedo, roughness, metalness, 0, ao);
+     BRDFContext sourceBRDFContext = BRDFContext::make(sourceSurface, -positionCS / hitDistance);
+ 
+-    AdjustShadingNormal(sourceSurface, sourceBRDFContext, false, false);    
++    AdjustShadingNormal(sourceSurface, sourceBRDFContext, false, false);
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++    // First experimental path: ordinary opaque, rough raster materials only.
++    // Always describe valid source surfaces, even when this pixel's ray misses.
++    bool hybridEligible = sourceSurface.Roughness >= 0.2f && sourceSurface.Metallic < 0.95f;
++    if (hybridEligible)
++        GISurfaces[surfaceIndex] = PSD_Pack(sourceSurface.Position, sourceSurface.Normal,
++            sourceSurface.Tangent, sourceSurface.Bitangent, sourceSurface.FaceNormal,
++            sourceBRDFContext.ViewDirection, sourceSurface.DiffuseAlbedo, sourceSurface.F0,
++            sourceSurface.Roughness, sourceSurface.Metallic, Feature::kDefault, false, depthVS);
++    float3 candidateWeight = 0;
++    float candidatePdf = 0;
++    bool candidateHit = false;
++#endif    
+ 
+     StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, sourceSurface.Normal, sourceBRDFContext.ViewDirection, true);     
+ 
+@@ -252,7 +279,29 @@
+             if (bsdf.SampleBSDF(brdfContext, material.Feature, surface, bsdfSample, randomSeed))
+                 direction = bsdfSample.wo;
+             else
+-                break;            
++                break;
++
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++            if (i == 0 && j == 0 && hybridEligible)
++            {
++                // Known full-hemisphere PDF, with full non-delta BSDF evaluation.
++                // Avoid mixing lobe-conditional PDFs and full-BSDF target weights.
++                direction = sourceSurface.Mul(SampleCosineHemisphere(randomSeed));
++                bsdfSample.wo = direction;
++                bsdfSample.pdf = max(dot(sourceSurface.Normal, direction), 0.0f) / K_PI;
++                bsdfSample.weight = sourceBSDF.Eval(sourceBRDFContext, Feature::kDefault,
++                    sourceSurface, direction).rgb / max(bsdfSample.pdf, 1e-8f);
++                bsdfSample.lobe = (uint)LobeType::DiffuseReflection;
++                candidatePdf = bsdfSample.pdf;
++            }
++#endif
++#if defined(DLSS_RR) && !SHARC_UPDATE
++            if (j == 0)
++                rrSpecularSample = bsdfSample.isLobe(LobeType::Specular) || bsdfSample.isLobe(LobeType::Delta);
++#if defined(HYBRID_RESTIR)
++            if (i == 0 && j == 0 && hybridEligible) rrSpecularSample = true;
++#endif
++#endif            
+  
+ #if defined(RAW_RADIANCE)
+             if (j == 0)
+@@ -295,6 +344,10 @@
+             throughput *= bsdfSample.weight;
+ #endif   // !RAW_RADIANCE
+             
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++            if (i == 0 && j == 0 && hybridEligible)
++                candidateWeight = throughput;
++#endif
+ #if defined(SHARC) && SHARC_UPDATE
+             SharcSetThroughput(sharcState, throughput);
+ #else
+@@ -307,6 +360,9 @@
+ #       endif            
+ #   endif
+             
++#if defined(HYBRID_RESTIR)
++        if (!(i == 0 && j == 0 && hybridEligible)) {
++#endif
+ #   if RUSSIAN_ROULETTE == 1
+         const float rrVal = 1.0f - min(1.0f, Color::RGBToLuminance(throughputColor));              
+         const float rrProb = min(rrVal, 0.95f);
+@@ -332,8 +388,11 @@
+                 originalThroughput /= (1.0f - rrProb);
+ #       endif                
+ #   endif
+-#endif
+-            
++#if defined(HYBRID_RESTIR)
++        }
++#endif
++#endif
++
+ #if defined(SHARC) && (SHARC_ENABLE_SH_ENCODING || !SHARC_UPDATE)
+             materialRoughnessPrev += bsdfSample.isLobe(LobeType::Diffuse) ? 1.0f : surface.Roughness;
+ #endif
+@@ -357,6 +416,12 @@
+                 rayCone = RayCone::make(rayCone.getWidth(), min(rayCone.getSpreadAngle() + ComputeRayConeSpreadAngleExpansionByScatterPDF(bsdfSample.pdf), 2.0 * K_PI));
+ 
+             payload = TraceRayStandard(Scene, ray, randomSeed);
++#if defined(DLSS_RR) && !SHARC_UPDATE
++            if (j == 0 && rrSpecularSample) {
++                rrDistanceSum += payload.Hit() ? payload.hitDistance : 0.0f;
++                rrDistanceCount++;
++            }
++#endif
+             
+             rayCone = rayCone.propagateDistance(payload.hitDistance);
+ 
+@@ -391,6 +456,15 @@
+             float3 localPosition = ray.Origin + direction * payload.hitDistance;
+ 
+             surface = SurfaceMaker::make(localPosition, payload, direction, rayCone, instance, material, false);
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++            if (i == 0 && j == 0 && hybridEligible && candidatePdf > 0 && all(candidateWeight > 1e-8f)) {
++                float3 n = dot(surface.FaceNormal, -direction) >= 0 ? surface.Normal : -surface.Normal;
++                half2 enc = EncodeNormal((half3)n);
++                uint packed = f32tof16(enc.x) | (f32tof16(enc.y) << 16);
++                GISecondaryPositionNormal[idx] = float4(surface.Position, asfloat(packed));
++                candidateHit = true;
++            }
++#endif
+ 
+ #if defined(SHARC)
+             sharcHitData.positionWorld = surface.Position;
+@@ -490,6 +564,15 @@
+         
+         }
+ 
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++        if (i == 0 && candidateHit && all(isfinite(sampleRadiance))) {
++            // Reservoir radiance is incident radiance, not BRDF-modulated color.
++            // Keep the original estimator in Main; final shading replaces ONLY
++            // this 1/SPP term after a valid reservoir and visibility test exist.
++            GISecondaryRadiance[idx] = float4(sampleRadiance / candidateWeight / MAX_SAMPLES, candidatePdf);
++            GIOriginalContribution[idx] = float4(sampleRadiance / MAX_SAMPLES, sourceSurface.AO);
++        }
++#endif
+ #if defined(NRD)
+ #   if defined(NRD_REBLUR)
+         float normHitDist = REBLUR_FrontEnd_GetNormHitDist(accumulatedHitDist, depthVS, Raytracing.HitDistSettings.xyz, sourceSurface.Roughness);
+@@ -534,6 +617,9 @@
+     specularRadiance /= MAX_SAMPLES;
+ #else
+     radiance /= MAX_SAMPLES;
++#endif
++#if defined(DLSS_RR) && !SHARC_UPDATE
++    RRHitDistance[idx] = rrDistanceCount > 0 ? rrDistanceSum / rrDistanceCount : 0.0f;
+ #endif
+        
+ #if !(defined(SHARC) && SHARC_UPDATE)
+diff --git a/shaders/raytracing/GlobalIllumination/Registers.hlsli b/shaders/raytracing/GlobalIllumination/Registers.hlsli
+--- a/shaders/raytracing/GlobalIllumination/Registers.hlsli
++++ b/shaders/raytracing/GlobalIllumination/Registers.hlsli
+@@ -78,4 +78,16 @@
+ SamplerState                                ClampSampler                : register(s1);
+ SamplerState                                PointWrapSampler            : register(s2);
+ 
++#if defined(DLSS_RR) && !SHARC_UPDATE
++RWTexture2D<float> RRHitDistance : register(u2);
++#endif
++
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++#include "interop/PackedSurfaceData.hlsli"
++RWTexture2D<float4> GISecondaryPositionNormal : register(u3);
++RWTexture2D<float4> GISecondaryRadiance : register(u4);
++// RGB = original candidate contribution, A = primary AO.
++RWTexture2D<float4> GIOriginalContribution : register(u5);
++RWStructuredBuffer<PackedSurfaceData> GISurfaces : register(u6);
++#endif
+ #endif // REGISTERS_HLSLI
+\ No newline at end of file
+diff --git a/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl b/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
+--- a/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
++++ b/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
+@@ -44,6 +44,27 @@
+     if (!RTXDI_IsValidGIReservoir(finalReservoir))
+         return;
+ 
++#if defined(HYBRID_RESTIR)
++    // Replace a single existing estimator term. A miss/unsupported material or
++    // failed/invalid reservoir leaves the complete original GI image untouched.
++    float4 initial = SecondaryRadiance[GlobalIndex];
++    float4 original = SecondaryDiffuseAlbedo[GlobalIndex];
++    if (initial.w <= 0) return;
++    float3 L = finalReservoir.position - rab.surface.Position;
++    float distanceToSample = length(L);
++    if (distanceToSample <= 1e-4f) return;
++    L /= distanceToSample;
++    if (!RAB_GetConservativeVisibility(rab, finalReservoir.position)) return;
++    float3 replacement = rab.Eval(L).rgb * finalReservoir.radiance * finalReservoir.weightSum * original.a;
++    if (!all(isfinite(replacement))) return;
++    float4 current = OutputRadiance[GlobalIndex];
++    float3 color = max(0.0f, current.rgb - original.rgb + replacement);
++    OutputRadiance[GlobalIndex] = float4(color, current.a);
++#if defined(DLSS_RR) && MAX_SAMPLES == 1
++    HybridRRHitDistance[GlobalIndex] = distanceToSample;
++#endif
++    return;
++#else
+     // Reconstruct initial reservoir from secondary surface data
+     RTXDI_GIReservoir initialReservoir = RTXDI_EmptyGIReservoir();
+     {
+@@ -114,4 +135,5 @@
+     float3 linearColor = LLGammaToTrueLinear(currentColor.rgb);
+     linearColor += finalGI;
+     OutputRadiance[GlobalIndex] = float4(LLTrueLinearToGamma(linearColor), currentColor.a);
++#endif
+ }
+diff --git a/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli b/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli
+--- a/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli
++++ b/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli
+@@ -47,6 +47,10 @@
+ // Output: MainTexture (final shading reads, adds GI, writes back)
+ RWTexture2D<float4> OutputRadiance        : register(u1);
+ 
++#if defined(HYBRID_RESTIR) && defined(DLSS_RR)
++RWTexture2D<float> HybridRRHitDistance : register(u2);
++#endif
++
+ SamplerState DefaultSampler               : register(s0);
+ 
+ // Define macros required by RTXDI before including its headers
+diff --git a/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli b/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli
+--- a/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli
++++ b/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli
+@@ -199,6 +199,8 @@
+ // ---------------------------------------------------------------------------
+ RAB_Surface RAB_GetGBufferSurface(uint2 pixelPosition, bool previousFrame)
+ {
++    if (previousFrame && g_ReSTIRGI.resetHistory != 0)
++        return RAB_EmptySurface();
+     if (any(pixelPosition >= Camera.RenderSize))
+         return RAB_EmptySurface();
+ 
+diff --git a/src/Pass/Raytracing/GlobalIllumination.cpp b/src/Pass/Raytracing/GlobalIllumination.cpp
+--- a/src/Pass/Raytracing/GlobalIllumination.cpp
++++ b/src/Pass/Raytracing/GlobalIllumination.cpp
+@@ -83,6 +83,14 @@
+ 		};
+ 
+ 		const auto& settings = Scene::GetSingleton()->m_Settings;
++        if (settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)
++            globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(2));
++        if (settings.ReSTIRGI.Enabled && settings.ReSTIRGI.ResamplingMode != ReSTIRGIResamplingMode::None &&
++            (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)) {
++            for (uint slot = 3; slot <= 5; ++slot)
++                globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(slot));
++            globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6));
++        }
+ 
+ 		if (settings.SHaRCSettings.Enabled) {
+ 			globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3));
+@@ -279,6 +287,16 @@
+ 			nvrhi::BindingSetItem::Texture_UAV(0, diffuseTexture)
+ 		};
+ 
++        if (settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(2, textureManager.GetTexture(RenderTarget::RRSpecularHitDist)));
++        if (settings.ReSTIRGI.Enabled && settings.ReSTIRGI.ResamplingMode != ReSTIRGIResamplingMode::None &&
++            (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)) {
++            auto* gi = renderer->GetReSTIRGIResources();
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(3, gi->secondaryGBufferPositionNormal));
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(4, gi->secondaryGBufferRadiance));
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(5, gi->secondaryGBufferDiffuseAlbedo));
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(6, gi->surfaceDataBuffer));
++        }
+ 		if (settings.SHaRCSettings.Enabled) {
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, m_SHaRC->GetSHaRCConstantBuffer()));
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(11, m_SHaRC->GetResolveBuffer()));
+diff --git a/src/Pass/Raytracing/ReSTIRGIPass.cpp b/src/Pass/Raytracing/ReSTIRGIPass.cpp
+--- a/src/Pass/Raytracing/ReSTIRGIPass.cpp
++++ b/src/Pass/Raytracing/ReSTIRGIPass.cpp
+@@ -64,7 +64,8 @@
+ 			nvrhi::BindingLayoutItem::Texture_SRV(12),              // t12: PrimarySpecularAlbedo
+ 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),     // t13: SurfaceDataBuffer (packed primary surface ping-pong)
+ 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),      // u0: GIReservoirs
+-			nvrhi::BindingLayoutItem::Texture_UAV(1),               // u1: OutputRadiance
++			nvrhi::BindingLayoutItem::Texture_UAV(1),
++            nvrhi::BindingLayoutItem::Texture_UAV(2),               // u1: OutputRadiance
+ 			nvrhi::BindingLayoutItem::Sampler(0),                   // s0
+ 		};
+ 		m_BindingLayout = GetRenderer()->GetDevice()->createBindingLayout(desc);
+@@ -121,11 +122,17 @@
+ 
+ 		m_Context = eastl::make_unique<rtxdi::ReSTIRGIContext>(staticParams);
+ 		m_BindingSetDirty.fill(true);
++        m_ResetHistory = true;
+ 	}
+ 
+ 	void ReSTIRGIPass::SettingsChanged(const Settings& settings)
+ 	{
++        m_Hybrid = settings.GeneralSettings.Mode == Mode::GlobalIllumination;
+ 		auto defines = Util::Shader::GetRaytracingDefines(settings, false, false);
++        if (m_Hybrid) defines.emplace_back(L"HYBRID_RESTIR", L"1");
++        if (m_Hybrid && settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)
++            defines.emplace_back(L"DLSS_RR", L"1");
++        m_ResetHistory = true;
+ 
+ 		if (defines != m_Defines) {
+ 			m_Defines = defines;
+@@ -133,7 +140,9 @@
+ 			m_BindingSetDirty.fill(true);
+ 		}
+ 
+-		m_Enabled = settings.ReSTIRGI.Enabled;
++		m_Enabled = settings.ReSTIRGI.Enabled && (m_Hybrid ?
++            (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR) :
++            settings.AdvancedSettings.StablePlanes);
+ 
+ 		if (!m_Enabled)
+ 			return;
+@@ -216,7 +225,7 @@
+ 			nvrhi::BindingSetItem::ConstantBuffer(1, m_ConstantBuffer),
+ 			nvrhi::BindingSetItem::ConstantBuffer(2, scene->GetFeatureBuffer()),
+ 			nvrhi::BindingSetItem::RayTracingAccelStruct(0, m_SceneTLAS->GetTopLevelAS().GetHandle()),
+-			nvrhi::BindingSetItem::Texture_SRV(1, textureManager.GetTexture(RenderTarget::ClipDepth)),
++			nvrhi::BindingSetItem::Texture_SRV(1, (m_Hybrid ? renderer->GetDepthTexture() : textureManager.GetTexture(RenderTarget::ClipDepth))),
+ 			nvrhi::BindingSetItem::Texture_SRV(2, renderTargets->normalRoughness),
+ 			nvrhi::BindingSetItem::Texture_SRV(3, giRes->prevGBufferDepth),
+ 			nvrhi::BindingSetItem::Texture_SRV(4, giRes->prevGBufferNormals),
+@@ -225,12 +234,13 @@
+ 			nvrhi::BindingSetItem::Texture_SRV(7, giRes->secondaryGBufferDiffuseAlbedo),
+ 			nvrhi::BindingSetItem::Texture_SRV(8, giRes->secondaryGBufferSpecularF0Roughness),
+ 			nvrhi::BindingSetItem::TypedBuffer_SRV(9, giRes->neighborOffsetBuffer),
+-			nvrhi::BindingSetItem::Texture_SRV(10, textureManager.GetTexture(RenderTarget::MotionVectors3D)),
++			nvrhi::BindingSetItem::Texture_SRV(10, (m_Hybrid ? renderer->GetMotionVectorTexture() : textureManager.GetTexture(RenderTarget::MotionVectors3D))),
+ 			nvrhi::BindingSetItem::Texture_SRV(11, textureManager.GetTexture(RenderTarget::DiffuseAlbedo)),
+ 			nvrhi::BindingSetItem::Texture_SRV(12, textureManager.GetTexture(RenderTarget::RRSpecularAlbedo)),
+ 			nvrhi::BindingSetItem::StructuredBuffer_SRV(13, giRes->surfaceDataBuffer),
+ 			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, giRes->reservoirBuffer),
+ 			nvrhi::BindingSetItem::Texture_UAV(1, renderer->GetMainTexture()),
++            nvrhi::BindingSetItem::Texture_UAV(2, textureManager.GetTexture(RenderTarget::RRSpecularHitDist)),
+ 			nvrhi::BindingSetItem::Sampler(0, m_LinearWrapSampler),
+ 		};
+ 
+@@ -242,7 +252,8 @@
+ 	{
+ 		m_Context->SetFrameIndex(m_Context->GetFrameIndex() + 1);
+ 
+-		ReSTIRGIData cbData;
++		ReSTIRGIData cbData{};
++        cbData.resetHistory = m_ResetHistory ? 1u : 0u;
+ 		cbData.giParams.reservoirBufferParams = m_Context->GetReservoirBufferParameters();
+ 		cbData.giParams.bufferIndices = m_Context->GetBufferIndices();
+ 		cbData.giParams.temporalResamplingParams = m_Context->GetTemporalResamplingParameters();
+@@ -257,6 +268,14 @@
+ 		cbData.runtimeParams.frameIndex = m_Context->GetFrameIndex();
+ 		cbData.runtimeParams.pad2 = 0;
+ 
++        // Spatial-only mode must never silently reuse temporal history.
++        if (m_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Spatial) {
++            cbData.resetHistory = 1;
++        }
++        if (m_Hybrid) {
++            cbData.giParams.finalShadingParams.enableFinalMIS = 0;
++            cbData.giParams.finalShadingParams.enableFinalVisibility = 1;
++        }
+ 		// Set uniform random number for permutation sampling
+ 		auto& tparams = cbData.giParams.temporalResamplingParams;
+ 		tparams.uniformRandomNumber = m_Context->GetFrameIndex();
+@@ -273,7 +292,7 @@
+ 		auto& textureManager = renderer->RenderTargetManager();
+ 
+ 		// Copy current depth to previous
+-		commandList->copyTexture(giRes->prevGBufferDepth, nvrhi::TextureSlice(), textureManager.GetTexture(RenderTarget::ClipDepth), nvrhi::TextureSlice());
++		commandList->copyTexture(giRes->prevGBufferDepth, nvrhi::TextureSlice(), (m_Hybrid ? renderer->GetDepthTexture() : textureManager.GetTexture(RenderTarget::ClipDepth)), nvrhi::TextureSlice());
+ 
+ 		// Copy current normals to previous (from PathTracing UAV3 output)
+ 		commandList->copyTexture(giRes->prevGBufferNormals, nvrhi::TextureSlice(), renderTargets->normalRoughness, nvrhi::TextureSlice());
+@@ -306,6 +325,15 @@
+ 		if (!m_BindingSets[currentSlot])
+ 			return;
+ 
++        auto* camera = Scene::GetSingleton()->GetCameraData();
++        const auto spp = Scene::GetSingleton()->m_Settings.RaytracingSettings.SamplesPerPixel;
++        if (camera->FrameIndex != m_LastFrame + 1u || camera->RenderSize.x != m_LastRenderSize.x ||
++            camera->RenderSize.y != m_LastRenderSize.y || spp != m_LastSPP) m_ResetHistory = true;
++        const float dx = camera->Position.x - camera->PositionPrev.x;
++        const float dy = camera->Position.y - camera->PositionPrev.y;
++        const float dz = camera->Position.z - camera->PositionPrev.z;
++        if (dx*dx + dy*dy + dz*dz > 512.0f*512.0f) m_ResetHistory = true;
++        if (m_ResetHistory) commandList->clearBufferUInt(giRes->reservoirBuffer, 0);
+ 		FillConstantBuffer(commandList);
+ 
+ 		auto resolution = GetRenderer()->GetDynamicResolution();
+@@ -390,6 +418,10 @@
+ 		}
+ 
+ 		// Copy current G-buffer data to previous frame buffers for next frame's temporal resampling
+-		CopyCurrentGBufferToPrevious(commandList);
++        if (!m_Hybrid) CopyCurrentGBufferToPrevious(commandList);
++        m_ResetHistory = false;
++        m_LastFrame = camera->FrameIndex;
++        m_LastRenderSize = camera->RenderSize;
++        m_LastSPP = spp;
+ 	}
+ }
+diff --git a/src/Pass/Raytracing/ReSTIRGIPass.h b/src/Pass/Raytracing/ReSTIRGIPass.h
+--- a/src/Pass/Raytracing/ReSTIRGIPass.h
++++ b/src/Pass/Raytracing/ReSTIRGIPass.h
+@@ -38,6 +38,11 @@
+ 		nvrhi::SamplerHandle m_LinearWrapSampler;
+ 
+ 		SceneTLAS* m_SceneTLAS;
++        bool m_Hybrid = false;
++        bool m_ResetHistory = true;
++        uint32_t m_LastFrame = 0;
++        uint2 m_LastRenderSize{};
++        int m_LastSPP = 0;
+ 
+ 		eastl::array<bool, Constants::MAX_FRAMES_IN_FLIGHT> m_BindingSetDirty {};
+ 		rtxdi::ReSTIRGI_ResamplingMode m_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+diff --git a/src/Renderer.cpp b/src/Renderer.cpp
+--- a/src/Renderer.cpp
++++ b/src/Renderer.cpp
+@@ -489,7 +489,7 @@
+ 		return;
+ 
+ 	m_RenderSize = resolution;
+-
++    if (m_ReSTIRGIResources) InitReSTIRGI();
+ 	m_RenderGraph->ResolutionChanged(m_RenderSize);
+ 
+ 	logger::info("Resolution set to {}x{}", resolution.x, resolution.y);
+diff --git a/src/Scene.cpp b/src/Scene.cpp
+--- a/src/Scene.cpp
++++ b/src/Scene.cpp
+@@ -120,6 +120,7 @@
+ 		renderGraph->AddNode({ true, "NRD Reblur Radiance", eastl::move(nrdReblurPass) });
+ 		renderGraph->AddNode({ true, "NRD Relax Radiance", eastl::move(nrdRelaxPass) });
+ 		renderGraph->AddNode({ true, "GI Composite", eastl::move(giComposite) });
++        renderGraph->AddNode({ true, "Hybrid ReSTIR GI", eastl::make_unique<Pass::Raytracing::ReSTIRGIPass>(renderer, tlasPtr) });
+ 	}
+ 	else if (mode == Mode::PathTracing) {
+ 		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
+diff --git a/src/Utils/Shader.cpp b/src/Utils/Shader.cpp
+--- a/src/Utils/Shader.cpp
++++ b/src/Utils/Shader.cpp
+@@ -93,6 +93,10 @@
+ 			// No water in GI
+ 			auto instanceMask = InstanceMask::All & ~InstanceMask::Water;
+ 			defines.emplace_back(L"INSTANCE_MASK", instanceMask);
++            if (!sharcUpdate && settings.ReSTIRGI.Enabled &&
++                settings.ReSTIRGI.ResamplingMode != ReSTIRGIResamplingMode::None &&
++                (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR))
++                defines.emplace_back(L"HYBRID_RESTIR", L"1");
+ 
+ 			if (!sharc || (sharc && !sharcUpdate)) {
+ 				if (settings.GeneralSettings.Denoiser == Denoiser::NRD_Reblur) {

@@ -1,0 +1,9 @@
+{
+  "cs": {"url":"https://github.com/community-shaders/skyrim-community-shaders.git", "commit":"84114745a7ee9991bc0543d7a5740cbd09688b1f", "vcpkg":"dddca6fa87f177e0678e2545c4b4636a44aa05bd", "submodules":["extern/CommonLibSSE-NG","extern/Streamline-DX12","extern/FidelityFX-SDK"]},
+  "cer": {"url":"https://github.com/Gistix/CreationEngineRaytracing.git", "commit":"09350844e63f602a3b788f1c815d29cee1b4fab2", "vcpkg":"30ef65cad98f08e7197c9a1656fbd871bcb72f2d", "submodules":["extern/CommonLibSSE-NG","extern/NVRHI","extern/NRD","extern/RTXDI-Library"]},
+  "dxc_url":"https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/dxc_2025_07_14.zip",
+  "dxc_sha256":"9ad895a6b039e3a8f8c22a1009f866800b840a74b50db9218d13319e215ea8a4",
+  "directx_headers":"d873b344dc540898868697245f100c2a67fe68d9",
+  "cmake":"4.2.3",
+  "abi":"20261023"
+}
