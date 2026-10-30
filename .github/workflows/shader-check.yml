@@ -1,0 +1,32 @@
+name: FalkosLichtspiel SSGI and rain shaders
+on:
+  workflow_dispatch:
+  push:
+    branches: ['dev/falkoslichtspiel-jiaye']
+    paths:
+      - 'validation/check_shaders.py'
+      - 'fork/sources.lock.json'
+      - 'fork/host.patch'
+      - '.github/workflows/shader-check.yml'
+permissions:
+  contents: read
+jobs:
+  shaders:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile SSGI and rain shader permutations
+        run: python validation/check_shaders.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FalkosLichtspiel-Shader-Checks
+          path: fork/out/shader-checks
+          if-no-files-found: warn
