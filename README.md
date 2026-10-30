@@ -11,4 +11,4 @@ as part of the coherent upstream raster stack, including their dependencies.
 Details: [fork/JIAYE_INTEGRATION.md](fork/JIAYE_INTEGRATION.md).
 Install instructions: [fork/INSTALL_FALKOSLICHTSPIEL.md](fork/INSTALL_FALKOSLICHTSPIEL.md).
 Windows compilation and the MO2 artifact must pass CI before installation.
-Hardware RT/CER is not integrated in this variant yet.
+The preserved Jiaye raster variant has no CER integration; the separate native RT build is documented above.
