@@ -2,7 +2,7 @@ name: FalkosLichtspiel RT experiment
 on:
   workflow_dispatch:
   push:
-    branches: ['dev/falkoslichtspiel-rt']
+    branches: ['dev/falkoslichtspiel-rt', 'claude/falkoslichtspiel-review']
     paths: ['legacy/**', 'RT_EXPERIMENT.md', '.github/workflows/rt-experiment.yml']
 permissions:
   contents: read
