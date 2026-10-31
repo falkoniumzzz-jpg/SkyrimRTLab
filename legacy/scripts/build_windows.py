@@ -147,7 +147,30 @@ def plugins(generator):
                     if base.name.startswith('build-') and not (rel.parts[0] == '_deps' or file.endswith(('.cmake','.json'))): continue
                     if p.suffix.lower() in ('.obj','.pch','.pdb','.exe','.dll','.lib','.zip','.7z','.tar','.gz'): continue
                     if p.is_file(): z.write(p, str(Path(prefix)/rel))
-    zip_tree(OUT/'runtime',OUT/'FalkosLichtspiel-RT-MO2.zip')
+    mo2_package(OUT/'runtime', OUT/'FalkosLichtspiel-RT-MO2.zip')
+
+DOCS_DIR = 'FalkosLichtspiel RT Docs'
+
+def mo2_package(runtime, output):
+    """MO2 installs an archive's root into the virtual Data folder.
+
+    Game files (SKSE/, Shaders/, ...) therefore sit at the archive root, and
+    documentation/notices go into one clearly named subfolder. A top-level
+    Data/ folder next to other files makes MO2 fall back to manual install.
+    """
+    data = runtime/'Data'
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as z:
+        for p in sorted(data.rglob('*')):
+            if p.is_file(): z.write(p, p.relative_to(data).as_posix())
+        for p in sorted(runtime.rglob('*')):
+            if p.is_file() and data not in p.parents:
+                z.write(p, (Path(DOCS_DIR)/p.relative_to(runtime)).as_posix())
+    with zipfile.ZipFile(output) as z:
+        names = set(z.namelist())
+    required = ['SKSE/Plugins/CommunityShaders.dll', 'SKSE/Plugins/CreationEngineRaytracing.dll']
+    missing = [n for n in required if n not in names]
+    if missing or any(n.lower().startswith('data/') for n in names):
+        raise RuntimeError(f'Invalid MO2 layout, missing={missing}')
 
 def main():
     p = argparse.ArgumentParser()
