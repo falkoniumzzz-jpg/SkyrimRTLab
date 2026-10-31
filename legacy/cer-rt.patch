@@ -24,6 +24,49 @@ diff --git a/interop/ReSTIRGIData.hlsli b/interop/ReSTIRGIData.hlsli
  };
  
  #endif // RESTIRGIDATA_HLSLI
+diff --git a/shaders/PostProcess.hlsl b/shaders/PostProcess.hlsl
+--- a/shaders/PostProcess.hlsl
++++ b/shaders/PostProcess.hlsl
+@@ -33,6 +33,7 @@
+ #include "include/Common/BRDF.hlsli"
+ 
+ RWTexture2D<float3> OutSpecularAlbedo        : register(u2);
++RWTexture2D<float3> OutDiffuseAlbedo         : register(u3);
+ #endif
+ 
+ WAVE_SIZE(32)
+@@ -70,10 +71,21 @@
+ #endif
+ 
+ #if defined(DLSS_RR)
++    // Every active pixel owns current guide values, including sky/background.
++    OutDiffuseAlbedo[pixelPos] = 0;
++    OutSpecularAlbedo[pixelPos] = 0;
++    OutNormalRoughness[pixelPos] = float4(0, 0, 1, 1);
++    if (depth >= SKY_Z || !all(isfinite(normalRoughness)) ||
++        dot(normalRoughness.xyz, normalRoughness.xyz) < 1e-8f)
++        return;
++
+     const float roughness = PBR::Roughness(saturate(normalRoughness.w), Raytracing.Roughness.x, Raytracing.Roughness.y);
+-    const float3 normal = normalRoughness.xyz;
++    const float3 normal = normalize(normalRoughness.xyz);
+ 
+-    const float3 positionVS = ScreenToViewPosition(sourceUV, depthVS, Camera.NDCToView);
++    // Sampling UVs address the backing texture. Projection UVs address the
++    // rendered viewport, which can be smaller with DLSS/dynamic resolution.
++    const float2 viewUV = (float2(pixelPos) + 0.5f) / scaledSize;
++    const float3 positionVS = ScreenToViewPosition(viewUV, depthVS, Camera.NDCToView);
+     const float3 viewDirection = normalize(-ViewToWorldPosition(positionVS, Camera.ViewInverse));
+ 
+     const float3 albedo = LLGammaToTrueLinear(AlbedoTexture.SampleLevel(PointClampSampler, sourceUV, 0).rgb);
+@@ -84,5 +96,7 @@
+     const float2 envBRDF = BRDF::EnvBRDF(roughness, NdotV);
+ 
+     OutSpecularAlbedo[pixelPos] = float3(F0 * envBRDF.x + envBRDF.y);
++    OutDiffuseAlbedo[pixelPos] = albedo * (1.0f - metalness);
++    OutNormalRoughness[pixelPos] = float4(normal, roughness);
+ #endif
+ }
 diff --git a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
 --- a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
 +++ b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
@@ -275,6 +318,76 @@ diff --git a/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli b/shaders/ray
      if (any(pixelPosition >= Camera.RenderSize))
          return RAB_EmptySurface();
  
+diff --git a/src/API.cpp b/src/API.cpp
+--- a/src/API.cpp
++++ b/src/API.cpp
+@@ -1,5 +1,5 @@
+ #include "API.h"
+-uint32_t GetShadowLabABI() { return 0x20261023u; }
++uint32_t GetShadowLabABI() { return 0x20261031u; }
+ #include "Scene.h"
+ #include "Renderer.h"
+ #include "Pass/Raytracing/Common/Accumulation.h"
+@@ -60,7 +60,13 @@
+ 
+ uint32_t PostExecution()
+ {
+-	return Renderer::GetSingleton()->PostExecution();
++	auto* renderer = Renderer::GetSingleton();
++	// Poll completion for CPU readbacks/timings, but select the submitted image.
++	// The native host wraps Execute/PostExecution in DX12Interop::Fence:
++	// its DX11 GPU wait follows this submission on the same DX12 queue.
++	// CPU query readiness must not choose an older image with current guides.
++	renderer->PostExecution();
++	return renderer->GetCurrentSlot();
+ }
+ 
+ void UpdateFeatureData(void* data, uint32_t size)
+@@ -115,6 +121,21 @@
+ 	specularHitDistance = textureManager.GetTexture(RenderTarget::RRSpecularHitDist)->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
+ }
+ 
++bool GetHybridRRInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& normalRoughness)
++{
++	diffuseAlbedo = nullptr;
++	normalRoughness = nullptr;
++	const auto& settings = Scene::GetSingleton()->m_Settings;
++	if (!settings.Enabled || settings.GeneralSettings.Mode != Mode::GlobalIllumination ||
++		settings.GeneralSettings.Denoiser != Denoiser::DLSS_RR)
++		return false;
++
++	auto& targets = Renderer::GetSingleton()->RenderTargetManager();
++	diffuseAlbedo = targets.GetTexture(RenderTarget::RRDiffuseAlbedo)->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
++	normalRoughness = targets.GetTexture(RenderTarget::RRNormalRoughness)->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
++	return diffuseAlbedo && normalRoughness;
++}
++
+ void SetSharedTextures(ID3D12Resource* albedo, ID3D12Resource* normalRoughness, ID3D12Resource* gnmao)
+ {
+ 	auto* renderer = Renderer::GetSingleton();
+@@ -160,4 +181,4 @@
+ 		return 0;
+ 
+ 	return textureManager->GetFakeDoubledVRAMUsage();
+-}
+\ No newline at end of file
++}
+diff --git a/src/API.h b/src/API.h
+--- a/src/API.h
++++ b/src/API.h
+@@ -23,9 +23,10 @@
+ 	CERT_API void GetSceneGraphCounters(uint32_t& textures, uint32_t& models, uint32_t& instances);
+ 	CERT_API void UpdateSettings(Settings);
+ 	CERT_API void GetRRInput(ID3D12Resource*& specularAlbedo, ID3D12Resource*& specularHitDistance);
++	CERT_API bool GetHybridRRInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& normalRoughness);
+ 	CERT_API void SetSharedTextures(ID3D12Resource* albedo, ID3D12Resource* normalRoughness, ID3D12Resource* gnmao);
+ 	CERT_API void GetSharedTextures(SharedTexture* depth, SharedTexture* motionVector, SharedTexture* main, SharedTexture* diffuseAlbedo);
+ 	CERT_API void UpdateJitter(float2 jitter);
+ 	CERT_API uint32_t GetAccumulatedFrameCount();
+ 	CERT_API uint64_t GetFakeDoubledVRAMUsage();
+-}
+\ No newline at end of file
++}
 diff --git a/src/Pass/Raytracing/GlobalIllumination.cpp b/src/Pass/Raytracing/GlobalIllumination.cpp
 --- a/src/Pass/Raytracing/GlobalIllumination.cpp
 +++ b/src/Pass/Raytracing/GlobalIllumination.cpp
@@ -453,6 +566,35 @@ diff --git a/src/Pass/Raytracing/ReSTIRGIPass.h b/src/Pass/Raytracing/ReSTIRGIPa
  
  		eastl::array<bool, Constants::MAX_FRAMES_IN_FLIGHT> m_BindingSetDirty {};
  		rtxdi::ReSTIRGI_ResamplingMode m_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+diff --git a/src/Pass/Utility/PostProcess.cpp b/src/Pass/Utility/PostProcess.cpp
+--- a/src/Pass/Utility/PostProcess.cpp
++++ b/src/Pass/Utility/PostProcess.cpp
+@@ -65,6 +65,7 @@
+ 			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(3)); // AlbedoTexture
+ 			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(4)); // GNMAOTexture
+ 			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(2)); // OutSpecularAlbedo
++			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(3)); // OutDiffuseAlbedo
+ 			defines.push_back({ L"DLSS_RR", L"1" });
+ 		}
+ 
+@@ -117,7 +118,8 @@
+ 			nvrhi::BindingSetItem::Texture_SRV(0, sourceDepth),
+ 			nvrhi::BindingSetItem::Texture_SRV(1, renderTargets ? renderTargets->normalRoughness.Get() : nullptr),
+ 			nvrhi::BindingSetItem::Texture_SRV(2, sourceMotionVectors),
+-			nvrhi::BindingSetItem::Texture_UAV(0, textureManager.GetTexture(RenderTarget::DownscaledNormalRoughness)),
++			nvrhi::BindingSetItem::Texture_UAV(0, textureManager.GetTexture(m_Denoiser == Denoiser::DLSS_RR ?
++				RenderTarget::RRNormalRoughness : RenderTarget::DownscaledNormalRoughness)),
+ 			nvrhi::BindingSetItem::Texture_UAV(1, textureManager.GetTexture(RenderTarget::DownscaledMotionVectors))
+ 		};
+ 
+@@ -129,6 +131,7 @@
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(3, renderTargets->albedo));
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(4, renderTargets->gnmao));
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(2, textureManager.GetTexture(RenderTarget::RRSpecularAlbedo)));
++			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(3, textureManager.GetTexture(RenderTarget::RRDiffuseAlbedo)));
+ 		}
+ 
+ 		m_BindingSets[currentSlot] = renderer->GetDevice()->createBindingSet(bindingSetDesc, m_BindingLayout);
 diff --git a/src/Renderer.cpp b/src/Renderer.cpp
 --- a/src/Renderer.cpp
 +++ b/src/Renderer.cpp
@@ -465,6 +607,42 @@ diff --git a/src/Renderer.cpp b/src/Renderer.cpp
  	m_RenderGraph->ResolutionChanged(m_RenderSize);
  
  	logger::info("Resolution set to {}x{}", resolution.x, resolution.y);
+diff --git a/src/Renderer/RenderTargetManager.cpp b/src/Renderer/RenderTargetManager.cpp
+--- a/src/Renderer/RenderTargetManager.cpp
++++ b/src/Renderer/RenderTargetManager.cpp
+@@ -34,6 +34,7 @@
+ 			desc.format = nvrhi::Format::R11G11B10_FLOAT;
+ 			break;
+ 		case RenderTarget::MotionVectors3D:
++		case RenderTarget::RRNormalRoughness:
+ 			desc.format = nvrhi::Format::RGBA16_FLOAT;
+ 			break;
+ 		case RenderTarget::DiffuseAlbedo:
+@@ -162,4 +163,4 @@
+ 			commandList->copyTexture(rt.sharedD3D12Handle, nvrhi::TextureSlice(), rt.handle, nvrhi::TextureSlice());
+ 		}
+ 	}
+-}
+\ No newline at end of file
++}
+diff --git a/src/Renderer/RenderTargetManager.h b/src/Renderer/RenderTargetManager.h
+--- a/src/Renderer/RenderTargetManager.h
++++ b/src/Renderer/RenderTargetManager.h
+@@ -23,6 +23,7 @@
+ 		SpecularFactor,
+ 		RRSpecularAlbedo = SpecularFactor,
+ 		RRSpecularHitDist,
++		RRNormalRoughness,
+ 		DownscaledMotionVectors,
+ 		DownscaledNormalRoughness,
+ 		Accumulation,
+@@ -41,4 +42,4 @@
+ 	void CopySharedTextures(nvrhi::ICommandList* commandList, uint32_t slot);
+ };
+ 
+-using RenderTarget = RenderTargetManager::Texture;
+\ No newline at end of file
++using RenderTarget = RenderTargetManager::Texture;
 diff --git a/src/Scene.cpp b/src/Scene.cpp
 --- a/src/Scene.cpp
 +++ b/src/Scene.cpp

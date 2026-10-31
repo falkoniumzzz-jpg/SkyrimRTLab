@@ -21,6 +21,10 @@ def prepare(skip_submodules=False):
                 run('streamline-lfs', ['git','lfs','pull'], target/'extern/Streamline-DX12')
         if json.loads((target/'vcpkg.json').read_text())['builtin-baseline'] != info['vcpkg']:
             raise RuntimeError(name+' vcpkg baseline mismatch')
+    # Legacy repair anchors include the old ABI marker. Unwind only our exact
+    # final delta before invoking them, so repeated preparation stays idempotent.
+    from apply_rt import remove_if_applied
+    remove_if_applied(WORK/'cs', WORK/'cer')
     modify(ROOT, WORK/'cs', WORK/'cer')
     from repair_gi import repair
     repair(WORK/'cer')

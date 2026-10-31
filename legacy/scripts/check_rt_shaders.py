@@ -1,6 +1,7 @@
 """Compile the actual RR/hybrid producer and RTXDI consumers, not substitute shaders."""
 import argparse
 import re
+import subprocess
 from pathlib import Path
 from common import OUT, run
 
@@ -31,6 +32,14 @@ def check(cer, dxc):
         for shader in ('gitemporalresampling','gispatialresampling','gifusedresampling','gifinalshading'):
             compile(mode+'-'+shader,'shaders/raytracing/rtxdi/restirgi/'+shader+'.hlsl',defs+['USE_RAY_QUERY=1'])
     compile('rr-postprocess','shaders/postprocess.hlsl',['DLSS_RR=1'],'cs_6_6','main')
+    for mode in ('NRD_REBLUR', 'NRD_RELAX'):
+        compile('postprocess-'+mode.lower(), 'shaders/postprocess.hlsl', ['NRD=1', mode+'=1'], 'cs_6_6', 'main')
+    # Check optimized DXIL bindings: the new guides must be real shader outputs.
+    reflection = subprocess.check_output([dxc, '-dumpbin', OUT/'rr-postprocess.dxil'], text=True)
+    for name, register in [('OutNormalRoughness','u0'), ('OutSpecularAlbedo','u2'), ('OutDiffuseAlbedo','u3')]:
+        if not re.search(r'^;\s*'+name+r'\s+UAV\b.*\b'+register+r'\b', reflection, re.M):
+            raise RuntimeError('RR guide output missing from optimized shader: '+name)
+    (OUT/'RR-GUIDE-REFLECTION.txt').write_text(reflection)
     (OUT/'RT-SHADERS-PASSED.txt').write_text('\n'.join(results)+'\n')
     print(f'PASS: {len(results)} real RR / ReSTIR shader permutations')
 

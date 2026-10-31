@@ -5,6 +5,14 @@ DXR test variant from the pinned CS PR-2196 / CER pair** in `legacy/sources.lock
 It is not a completed hardware-RT port into Jiaye pp / CS 1.9. The existing
 `dev/falkoslichtspiel-jiaye` branch and its packages are independent.
 
+## Foundation update (31 October 2026)
+
+See [CLAUDE_REVIEW.md](CLAUDE_REVIEW.md) for the new material-guide export,
+submitted-frame selection, ABI 0x20261031 and independent review checklist.
+[JIAYE_PORT_MAP.md](JIAYE_PORT_MAP.md) records concrete Jiaye migration blockers.
+The new native source fixes the previously reported menu warning; the latest
+Windows run must still confirm full compilation and packaging.
+
 ## Changes
 
 - In-game window, heading and home page say **FalkosLichtspiel RT**. DLL names

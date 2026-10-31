@@ -128,6 +128,8 @@ def plugins(generator):
             shutil.copy2(p,destination)
     shutil.copy2(ROOT/'TESTING_DE.md', OUT/'runtime/TESTING_DE.md')
     shutil.copy2(ROOT.parent/'RT_EXPERIMENT.md', OUT/'runtime/README-FalkosLichtspiel-RT.md')
+    for name in ('CLAUDE_REVIEW.md', 'JIAYE_PORT_MAP.md'):
+        shutil.copy2(ROOT.parent/name, OUT/'runtime'/name)
     shutil.copy2(ROOT/'sources.lock.json', OUT/'runtime/sources.lock.json')
     # Keep public source and dependency source locally with the binary result.
     # Prebuilt vcpkg caching is disabled in CI so buildtrees contain the built sources.

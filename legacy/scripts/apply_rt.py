@@ -4,6 +4,20 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 
+def remove_if_applied(cs,cer):
+    """Unwind only our exact delta before re-running older preparation repairs."""
+    for name,source in [('cs',cs),('cer',cer)]:
+        patch=(ROOT/(name+'-rt.patch')).read_bytes()
+        check=subprocess.run(['git','apply','--reverse','--check','-'],cwd=source,input=patch,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        if check.returncode == 0:
+            subprocess.run(['git','apply','--reverse','-'],cwd=source,input=patch,check=True,
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        else:
+            marker=source/('include/CreationEngineRaytracing.h' if name=='cs' else 'src/API.cpp')
+            if marker.exists() and 'GetHybridRRInputs' in marker.read_text():
+                raise RuntimeError(f'{name}: different RT patch or local edits; use a separate pinned source directory')
+
 def apply(cs,cer):
     for name,source in [('cs',cs),('cer',cer)]:
         patch=(ROOT/(name+'-rt.patch')).read_bytes()

@@ -1,3 +1,46 @@
+diff --git a/include/CreationEngineRaytracing.h b/include/CreationEngineRaytracing.h
+--- a/include/CreationEngineRaytracing.h
++++ b/include/CreationEngineRaytracing.h
+@@ -519,6 +519,7 @@
+ 	using GetPassTimingsFn = void (*)(eastl::vector<PassTiming>&);
+ 	using UpdateSettingsFn = void (*)(Settings);
+ 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
++	using GetHybridRRInputsFn = bool (*)(ID3D12Resource*&, ID3D12Resource*&);
+ 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
+ 	using GetSharedTexturesFn = void (*)(SharedTexture*, SharedTexture*, SharedTexture*, SharedTexture*);
+ 	using UpdateJitterFn = void (*)(float2);
+@@ -541,6 +542,7 @@
+ 	GetSceneGraphCountersFn GetSceneGraphCounters = nullptr;
+ 	UpdateSettingsFn UpdateSettings = nullptr;
+ 	GetRRInputFn GetRRInput = nullptr;
++	GetHybridRRInputsFn GetHybridRRInputs = nullptr;
+ 	SetSharedTexturesFn SetSharedTextures = nullptr;
+ 	GetSharedTexturesFn GetSharedTextures = nullptr;
+ 	UpdateJitterFn UpdateJitter = nullptr;
+@@ -561,7 +563,7 @@
+ 		}
+ 
+         auto stamp = reinterpret_cast<uint32_t (*)()>(GetProcAddress(handle, "GetShadowLabABI"));
+-        if (!stamp || stamp() != 0x20261023u) {
++        if (!stamp || stamp() != 0x20261031u) {
+             logger::critical("ShadowLab: backend pair mismatch; refusing initialization");
+             handle = nullptr;
+             return;
+@@ -580,12 +582,13 @@
+ 		LOAD_FN(GetSceneGraphCounters);
+ 		LOAD_FN(UpdateSettings);
+ 		LOAD_FN(GetRRInput);
++		LOAD_FN(GetHybridRRInputs);
+ 		LOAD_FN(SetSharedTextures);
+ 		LOAD_FN(GetSharedTextures);
+ 		LOAD_FN(UpdateJitter);
+ 		LOAD_FN(SetSkinDetailNormal);
+ 		LOAD_FN(GetAccumulatedFrameCount);
+ 		LOAD_FN(GetFakeDoubledVRAMUsage);
+-        if (!InitializeRenderer || !InitializeVulkanRenderer || !Initialize || !UpdateCamera || !Execute || !PostExecution || !SetResolution || !UpdateFeatureData || !SetSkyHemisphere || !SetWaterFlowMap || !GetPassTimings || !GetSceneGraphCounters || !UpdateSettings || !GetRRInput || !SetSharedTextures || !GetSharedTextures || !UpdateJitter || !SetSkinDetailNormal || !GetAccumulatedFrameCount || !GetFakeDoubledVRAMUsage) handle = nullptr;
++        if (!InitializeRenderer || !InitializeVulkanRenderer || !Initialize || !UpdateCamera || !Execute || !PostExecution || !SetResolution || !UpdateFeatureData || !SetSkyHemisphere || !SetWaterFlowMap || !GetPassTimings || !GetSceneGraphCounters || !UpdateSettings || !GetRRInput || !GetHybridRRInputs || !SetSharedTextures || !GetSharedTextures || !UpdateJitter || !SetSkinDetailNormal || !GetAccumulatedFrameCount || !GetFakeDoubledVRAMUsage) handle = nullptr;
+ 	}
+ };
 diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
 --- a/src/Features/Raytracing.cpp
 +++ b/src/Features/Raytracing.cpp
@@ -21,6 +64,32 @@ diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
  	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination)
  		ConvertTextures();
  
+@@ -1679,11 +1685,23 @@
+ 
+ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDist)
+ {
++	diffuseAlbedo = nullptr;
++	specularAlbedo = nullptr;
++	normalRoughness = nullptr;
++	specHitDist = nullptr;
++	if (!initialized || !creationEngineRaytracing || !settings.CreationEngineRaytracingSettings.Enabled)
++		return;
+ 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
+ 		return;
+ 
+-	diffuseAlbedo = diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->GetResource();
+-	normalRoughness = normalRoughnessTexture->GetResource();
++	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
++		// Full-resolution guides (FP16 normals) use RTGI's material mapping.
++		if (!creationEngineRaytracing->GetHybridRRInputs(diffuseAlbedo, normalRoughness))
++			return;
++	} else {
++		diffuseAlbedo = diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->GetResource();
++		normalRoughness = normalRoughnessTexture->GetResource();
++	}
+ 
+ 	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDist);
+ }
 diff --git a/src/Features/Upscaling/Streamline.cpp b/src/Features/Upscaling/Streamline.cpp
 --- a/src/Features/Upscaling/Streamline.cpp
 +++ b/src/Features/Upscaling/Streamline.cpp
@@ -51,6 +120,23 @@ diff --git a/src/Features/Upscaling/Streamline.cpp b/src/Features/Upscaling/Stre
  
  	slConstants.mvecScale = { 1.0f, 1.0f };
  	slConstants.motionVectors3D = sl::Boolean::eFalse;
+@@ -836,6 +854,16 @@
+ 
+ 	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specHitDist);
+ 
++	if (!diffuseAlbedo || !specularAlbedo || !normalRoughness || !specHitDist) {
++		static bool loggedMissingGuides = false;
++		if (!loggedMissingGuides) {
++			logger::error("[FalkosLichtspiel RT] RR guides unavailable; using DLSS SR for this frame");
++			loggedMissingGuides = true;
++		}
++		Upscale(a_commandList, a_input, a_output, a_depth, a_motionVectors, a_reactiveMask);
++		return;
++	}
++
+ 	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+ 	auto renderSize = Util::ConvertToDynamic(screenSize);
+ 
 diff --git a/src/Menu.cpp b/src/Menu.cpp
 --- a/src/Menu.cpp
 +++ b/src/Menu.cpp
@@ -66,10 +152,11 @@ diff --git a/src/Menu.cpp b/src/Menu.cpp
 diff --git a/src/Menu/HomePageRenderer.cpp b/src/Menu/HomePageRenderer.cpp
 --- a/src/Menu/HomePageRenderer.cpp
 +++ b/src/Menu/HomePageRenderer.cpp
-@@ -68,7 +68,7 @@
+@@ -67,8 +67,7 @@
+ 	ImVec2 windowSize = ImGui::GetWindowSize();
  	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
  	auto expectedTag = std::format("v{}", versionStr);
- 	auto* i18n = I18n::GetSingleton();
+-	auto* i18n = I18n::GetSingleton();
 -	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Community Shaders {version} [{build}]");
 +	std::string titleWithVersion = "Welcome to FalkosLichtspiel RT";
  	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());

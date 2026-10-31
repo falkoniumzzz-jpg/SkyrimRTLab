@@ -2,6 +2,7 @@
 import re
 from pathlib import Path
 import argparse
+import json
 
 def declarations(source):
     source = re.sub(r'/\*.*?\*/|//[^\n]*', '', source, flags=re.S)
@@ -24,14 +25,23 @@ def declarations(source):
     return result
 
 def check(cs, cer):
-    host = declarations((cs/'include/CreationEngineRaytracing.h').read_text())
+    host_text = (cs/'include/CreationEngineRaytracing.h').read_text()
+    host = declarations(host_text)
     backend = declarations((cer/'src/Types/Settings.h').read_text())
     assert 'Settings' in backend
     for name, fields in backend.items():
         if host.get(name) != fields: raise RuntimeError(f'ABI declaration drift: {name}: {host.get(name)} != {fields}')
     api = (cer/'src/API.h').read_text()
     assert 'SharedTexture* depth, SharedTexture* motionVector, SharedTexture* main, SharedTexture* diffuseAlbedo' in api
-    print(f'PASS: {len(backend)} ordered settings/enum declarations, four-array shared-texture API')
+    assert 'CERT_API bool GetHybridRRInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& normalRoughness);' in api
+    assert 'using GetHybridRRInputsFn = bool (*)(ID3D12Resource*&, ID3D12Resource*&);' in host_text
+    assert 'LOAD_FN(GetHybridRRInputs)' in host_text
+    stamp = int(json.loads((Path(__file__).resolve().parents[1]/'sources.lock.json').read_text())['abi'], 16)
+    backend_stamp = re.search(r'GetShadowLabABI\(\)\s*\{\s*return (0x[0-9a-fA-F]+)u;', (cer/'src/API.cpp').read_text())
+    host_stamp = re.search(r'stamp\(\) != (0x[0-9a-fA-F]+)u', host_text)
+    if not backend_stamp or not host_stamp or int(backend_stamp[1],16) != stamp or int(host_stamp[1],16) != stamp:
+        raise RuntimeError('Paired DLL ABI stamp mismatch')
+    print(f'PASS: {len(backend)} ordered declarations, hybrid RR export, paired stamp {stamp:#x}')
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
