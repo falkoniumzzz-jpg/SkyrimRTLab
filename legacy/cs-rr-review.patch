@@ -1,0 +1,23 @@
+diff --git a/src/Features/Upscaling/Streamline.cpp b/src/Features/Upscaling/Streamline.cpp
+index 494c5a9..f112841 100644
+--- a/src/Features/Upscaling/Streamline.cpp
++++ b/src/Features/Upscaling/Streamline.cpp
+@@ -604,6 +604,18 @@ void Streamline::SetDLSSDOptions(sl::ViewportHandle p_viewport, uint32_t width)
+ 	dlssOptions.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
+ 	dlssOptions.alphaUpscalingEnabled = sl::Boolean::eFalse;
+ 
++	// RR guides carry world-space normals (ConvertTexturesCS / CER PostProcess)
++	// and world-space specular hit distances. DLSS-RR needs both matrices to
++	// interpret them; value-initialized options would leave them all zero.
++	// Same engine->Streamline layout conversion as cameraViewToClip.
++	{
++		const auto worldToView = globals::game::frameBufferCached.GetCameraView().Transpose();
++		const auto viewToWorld = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
++		static_assert(sizeof(worldToView) == sizeof(sl::float4x4));
++		dlssOptions.worldToCameraView = *reinterpret_cast<const sl::float4x4*>(&worldToView);
++		dlssOptions.cameraViewToWorld = *reinterpret_cast<const sl::float4x4*>(&viewToWorld);
++	}
++
+ 	if (SL_FAILED(result, slDLSSDSetOptions(p_viewport, dlssOptions))) {
+ 		logger::critical("[Streamline] Could not enable DLSSD");
+ 	}
