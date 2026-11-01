@@ -5,6 +5,7 @@ Run on Windows with Python 3.12+, Git, VS 2022/2026 C++ tools and CMake 4.2.3.
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -43,7 +44,21 @@ def tools():
     generator = "Visual Studio 18 2026" if selected["installationVersion"].startswith("18.") else "Visual Studio 17 2022"
     (OUT / "toolchain.json").write_text(json.dumps(selected, indent=2), encoding="utf-8")
     os.environ["PATH"] = str(dxc.parent) + os.pathsep + os.environ["PATH"]
-    return dxc, generator
+    return dxc, generator, selected
+
+
+def msvc_env(vs):
+    """Environment of vcvars64.bat, for the Ninja build (keys upper-cased like os.environ)."""
+    vcvars = Path(vs["installationPath"]) / "VC/Auxiliary/Build/vcvars64.bat"
+    out = subprocess.check_output(f'cmd /s /c ""{vcvars}" >nul && set"', text=True, errors="replace")
+    env = os.environ.copy()
+    for line in out.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key and not key.startswith("="):
+            env[key.upper()] = value
+    if not shutil.which("cl.exe", path=env.get("PATH")):
+        raise RuntimeError("vcvars64 did not put cl.exe on PATH")
+    return env
 
 
 def vcpkg_for(name):
@@ -53,12 +68,31 @@ def vcpkg_for(name):
     return vcpkg
 
 
-def build_cs(cs, generator):
+def summarize_compile_errors(label):
+    """Collect every compiler/linker error of a failed build into one short file."""
+    log = OUT / "logs" / (label + ".log")
+    if not log.exists():
+        return
+    pattern = re.compile(r"(error C\d+|error LNK\d+|fatal error|: error:)")
+    errors = []
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        if pattern.search(line) and line not in errors:
+            errors.append(line)
+    (OUT / "logs" / (label + "-errors.txt")).write_text(
+        f"{len(errors)} distinct error lines\n" + "\n".join(errors) + "\n", encoding="utf-8")
+    print(f"::group::{label}: {len(errors)} distinct error lines", flush=True)
+    for line in errors:
+        print(line, flush=True)
+    print("::endgroup::", flush=True)
+
+
+def build_cs(cs, vs):
     vcpkg = vcpkg_for("cs")
-    env = os.environ.copy()
+    env = msvc_env(vs)
     env["VCPKG_ROOT"] = str(vcpkg)
     build = WORK / "build-cs"
-    # Same configuration as the proven CS 1.9.0 host build (dev/cs-1.9-rt-host).
+    # CS 1.9.0 host options, built with CS's own "ninja" preset settings so that
+    # "ninja -k 0" reports every compile error of a run instead of stopping at the first.
     options = [f"-DCMAKE_TOOLCHAIN_FILE={vcpkg.as_posix()}/scripts/buildsystems/vcpkg.cmake",
         f"-DVCPKG_OVERLAY_PORTS={cs.as_posix()}/cmake/ports",
         f"-DVCPKG_OVERLAY_TRIPLETS={cs.as_posix()}/cmake/triplets",
@@ -68,9 +102,17 @@ def build_cs(cs, generator):
         "-DCOMMONLIB_PREBUILT=OFF", "-DCOMMONLIB_PREBUILT_MULTICONFIG=OFF",
         "-DSKSE_SUPPORT_XBYAK=ON", "-DDEVBENCH_BRIDGE=OFF", "-DZIP_TO_DIST=OFF",
         "-DAIO_ZIP_TO_DIST=OFF", "-DAUTO_PLUGIN_DEPLOYMENT=OFF", "-DTRACY_SUPPORT=OFF",
-        "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF", "-DSC_COMPILE_PDB=OFF"]
-    run("cs-configure", ["cmake", "-S", cs, "-B", build, "-G", generator, "-A", "x64", *options], env=env)
-    run("cs-build", ["cmake", "--build", build, "--config", "Release", "--target", "CommunityShaders", "--parallel", "2"], env=env)
+        "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF", "-DSC_COMPILE_PDB=OFF",
+        "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_FLAGS=/EHsc",
+        # Exactly this value: FidelityFX-SDK detects x64 under Ninja by string equality.
+        "-DCMAKE_EXE_LINKER_FLAGS=/machine:x64",
+        "-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe"]
+    run("cs-configure", ["cmake", "-S", cs, "-B", build, "-G", "Ninja", *options], env=env)
+    try:
+        run("cs-build", ["cmake", "--build", build, "--target", "CommunityShaders", "--parallel", "4", "--", "-k", "0"], env=env)
+    except RuntimeError:
+        summarize_compile_errors("cs-build")
+        raise
     return build
 
 
@@ -193,12 +235,13 @@ def main():
     if os.name != "nt":
         raise RuntimeError("Full build requires Windows/MSVC. Use the GitHub Actions workflow.")
     OUT.mkdir(parents=True, exist_ok=True)
-    dxc, generator = tools()
+    dxc, generator, vs = tools()
     cs, cer = prepare()
     run("cer-gi-permutations", [sys.executable, ROOT.parent / "legacy/scripts/check_gi_shaders.py", "--cer", cer, "--dxc", dxc])
     run("cer-rr-restir-shaders", [sys.executable, ROOT.parent / "legacy/scripts/check_rt_shaders.py", "--cer", cer, "--dxc", dxc])
+    # CS first: it carries the port, so a failure shows up before the (known-good) CER build.
+    cs_build = build_cs(cs, vs)
     cer_build = build_cer(cer, generator, OUT / "runtime/Data")
-    cs_build = build_cs(cs, generator)
     stage_runtime(cs, cer, cs_build, cer_build)
     docs_and_licenses(cs, cer, {"cs": cs_build, "cer": cer_build})
     corresponding_source()

@@ -1,6 +1,6 @@
 diff --git a/features/Raytracing/Shaders/Features/Raytracing.ini b/features/Raytracing/Shaders/Features/Raytracing.ini
 new file mode 100644
-index 00000000..19f01444
+index 0000000..19f0144
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Features/Raytracing.ini
 @@ -0,0 +1,2 @@
@@ -9,7 +9,7 @@ index 00000000..19f01444
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/ConvertTexturesCS.hlsl b/features/Raytracing/Shaders/Raytracing/ConvertTexturesCS.hlsl
 new file mode 100644
-index 00000000..aba2da4d
+index 0000000..aba2da4
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/ConvertTexturesCS.hlsl
 @@ -0,0 +1,33 @@
@@ -49,7 +49,7 @@ index 00000000..aba2da4d
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/CopyDepth.hlsl b/features/Raytracing/Shaders/Raytracing/CopyDepth.hlsl
 new file mode 100644
-index 00000000..d81c5058
+index 0000000..d81c505
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/CopyDepth.hlsl
 @@ -0,0 +1,33 @@
@@ -89,7 +89,7 @@ index 00000000..d81c5058
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/CubeToHemiCS.hlsl b/features/Raytracing/Shaders/Raytracing/CubeToHemiCS.hlsl
 new file mode 100644
-index 00000000..0bf10bd9
+index 0000000..0bf10bd
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/CubeToHemiCS.hlsl
 @@ -0,0 +1,31 @@
@@ -127,7 +127,7 @@ index 00000000..0bf10bd9
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/GICompositeCS.hlsl b/features/Raytracing/Shaders/Raytracing/GICompositeCS.hlsl
 new file mode 100644
-index 00000000..c076b86f
+index 0000000..c076b86
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/GICompositeCS.hlsl
 @@ -0,0 +1,13 @@
@@ -147,7 +147,7 @@ index 00000000..c076b86f
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/Includes/Common.hlsli b/features/Raytracing/Shaders/Raytracing/Includes/Common.hlsli
 new file mode 100644
-index 00000000..75e7401c
+index 0000000..75e7401
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/Includes/Common.hlsli
 @@ -0,0 +1,15 @@
@@ -169,7 +169,7 @@ index 00000000..75e7401c
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/Includes/VanillaToPBR.hlsli b/features/Raytracing/Shaders/Raytracing/Includes/VanillaToPBR.hlsli
 new file mode 100644
-index 00000000..ea5aa34f
+index 0000000..ea5aa34
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/Includes/VanillaToPBR.hlsli
 @@ -0,0 +1,25 @@
@@ -201,7 +201,7 @@ index 00000000..ea5aa34f
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/PTCompositeCS.hlsl b/features/Raytracing/Shaders/Raytracing/PTCompositeCS.hlsl
 new file mode 100644
-index 00000000..285165dd
+index 0000000..285165d
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/PTCompositeCS.hlsl
 @@ -0,0 +1,28 @@
@@ -236,7 +236,7 @@ index 00000000..285165dd
 \ No newline at end of file
 diff --git a/features/Raytracing/Shaders/Raytracing/ShadowLabCompositeCS.hlsl b/features/Raytracing/Shaders/Raytracing/ShadowLabCompositeCS.hlsl
 new file mode 100644
-index 00000000..1b64e018
+index 0000000..1b64e01
 --- /dev/null
 +++ b/features/Raytracing/Shaders/Raytracing/ShadowLabCompositeCS.hlsl
 @@ -0,0 +1,12 @@
@@ -254,7 +254,7 @@ index 00000000..1b64e018
 +}
 diff --git a/features/SceneGraph Explorer/Shaders/Features/SceneGraphExplorer.ini b/features/SceneGraph Explorer/Shaders/Features/SceneGraphExplorer.ini
 new file mode 100644
-index 00000000..19f01444
+index 0000000..19f0144
 --- /dev/null
 +++ b/features/SceneGraph Explorer/Shaders/Features/SceneGraphExplorer.ini	
 @@ -0,0 +1,2 @@
@@ -263,7 +263,7 @@ index 00000000..19f01444
 \ No newline at end of file
 diff --git a/features/Upscaling/Shaders/Upscaling/ColorSpaceCS.hlsl b/features/Upscaling/Shaders/Upscaling/ColorSpaceCS.hlsl
 new file mode 100644
-index 00000000..0d357c95
+index 0000000..0d357c9
 --- /dev/null
 +++ b/features/Upscaling/Shaders/Upscaling/ColorSpaceCS.hlsl
 @@ -0,0 +1,25 @@
@@ -295,7 +295,7 @@ index 00000000..0d357c95
 \ No newline at end of file
 diff --git a/features/Upscaling/Shaders/Upscaling/CopyDepthCS.hlsl b/features/Upscaling/Shaders/Upscaling/CopyDepthCS.hlsl
 new file mode 100644
-index 00000000..e44c360b
+index 0000000..e44c360
 --- /dev/null
 +++ b/features/Upscaling/Shaders/Upscaling/CopyDepthCS.hlsl
 @@ -0,0 +1,29 @@
@@ -329,7 +329,7 @@ index 00000000..e44c360b
 +	DepthOut[id.xy] = depth;
 +}
 diff --git a/features/Upscaling/Shaders/Upscaling/EncodeTexturesCS.hlsl b/features/Upscaling/Shaders/Upscaling/EncodeTexturesCS.hlsl
-index 94d48eb5..229813f9 100644
+index 94d48eb..229813f 100644
 --- a/features/Upscaling/Shaders/Upscaling/EncodeTexturesCS.hlsl
 +++ b/features/Upscaling/Shaders/Upscaling/EncodeTexturesCS.hlsl
 @@ -26,12 +26,14 @@ RWTexture2D<float> DepthOutput : register(u3);
@@ -367,7 +367,7 @@ index 94d48eb5..229813f9 100644
 +}
 \ No newline at end of file
 diff --git a/features/Upscaling/Shaders/Upscaling/Streamline/reflex.license.txt b/features/Upscaling/Shaders/Upscaling/Streamline/reflex.license.txt
-index e91736c1..52af1ee4 100644
+index e91736c..52af1ee 100644
 --- a/features/Upscaling/Shaders/Upscaling/Streamline/reflex.license.txt
 +++ b/features/Upscaling/Shaders/Upscaling/Streamline/reflex.license.txt
 @@ -1,57 +1,57 @@
@@ -586,7 +586,7 @@ index e91736c1..52af1ee4 100644
  
 diff --git a/include/CreationEngineRaytracing.h b/include/CreationEngineRaytracing.h
 new file mode 100644
-index 00000000..01376dd4
+index 0000000..01376dd
 --- /dev/null
 +++ b/include/CreationEngineRaytracing.h
 @@ -0,0 +1,594 @@
@@ -1185,7 +1185,7 @@ index 00000000..01376dd4
 +	}
 +};
 diff --git a/package/SKSE/Plugins/CommunityShaders/Translations/en.json b/package/SKSE/Plugins/CommunityShaders/Translations/en.json
-index 173d6ede..130f517a 100644
+index 173d6ed..130f517 100644
 --- a/package/SKSE/Plugins/CommunityShaders/Translations/en.json
 +++ b/package/SKSE/Plugins/CommunityShaders/Translations/en.json
 @@ -2287,5 +2287,170 @@
@@ -1361,7 +1361,7 @@ index 173d6ede..130f517a 100644
 +    "feature.upscaling.frame_generation_unavailable": "Frame Generation is not available on your system.\nThis requires either NVIDIA DLSS-G or AMD FSR 3.1 Frame Generation support and D3D12 interop."
  }
 diff --git a/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json b/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json
-index da5425b1..c9602ba9 100644
+index da5425b..c9602ba 100644
 --- a/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json
 +++ b/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json
 @@ -2077,5 +2077,170 @@
@@ -1537,7 +1537,7 @@ index da5425b1..c9602ba9 100644
 +    "feature.upscaling.frame_generation_unavailable": "帧生成在此系统上不可用。\n这需要 NVIDIA DLSS-G 或 AMD FSR 3.1 帧生成支持以及 D3D12 互操作。"
  }
 diff --git a/package/Shaders/Common/SharedData.hlsli b/package/Shaders/Common/SharedData.hlsli
-index 8ae0643d..a7d98183 100644
+index 8ae0643..a7d9818 100644
 --- a/package/Shaders/Common/SharedData.hlsli
 +++ b/package/Shaders/Common/SharedData.hlsli
 @@ -334,6 +334,16 @@ namespace SharedData
@@ -1566,7 +1566,7 @@ index 8ae0643d..a7d98183 100644
  		SkinData skinData;
  	};
 diff --git a/package/Shaders/DeferredCompositeCS.hlsl b/package/Shaders/DeferredCompositeCS.hlsl
-index c46430a8..b000577a 100644
+index c46430a..b000577 100644
 --- a/package/Shaders/DeferredCompositeCS.hlsl
 +++ b/package/Shaders/DeferredCompositeCS.hlsl
 @@ -46,11 +46,11 @@ Texture2D<float4> SsgiSpecularTexture : register(t13);
@@ -1608,7 +1608,7 @@ index c46430a8..b000577a 100644
  
  	color = Color::IrradianceToGamma(color);
 diff --git a/package/Shaders/Lighting.hlsl b/package/Shaders/Lighting.hlsl
-index ab349124..eab69379 100644
+index ab34912..eab6937 100644
 --- a/package/Shaders/Lighting.hlsl
 +++ b/package/Shaders/Lighting.hlsl
 @@ -13,6 +13,8 @@
@@ -1784,7 +1784,7 @@ index ab349124..eab69379 100644
  #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
  	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
 diff --git a/package/Shaders/RunGrass.hlsl b/package/Shaders/RunGrass.hlsl
-index fb3fdb81..62ae9040 100644
+index fb3fdb8..62ae904 100644
 --- a/package/Shaders/RunGrass.hlsl
 +++ b/package/Shaders/RunGrass.hlsl
 @@ -598,7 +598,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
@@ -1802,7 +1802,7 @@ index fb3fdb81..62ae9040 100644
  }
 diff --git a/src/DX12Interop.cpp b/src/DX12Interop.cpp
 new file mode 100644
-index 00000000..a38be4f4
+index 0000000..a38be4f
 --- /dev/null
 +++ b/src/DX12Interop.cpp
 @@ -0,0 +1,231 @@
@@ -2040,7 +2040,7 @@ index 00000000..a38be4f4
 \ No newline at end of file
 diff --git a/src/DX12Interop.h b/src/DX12Interop.h
 new file mode 100644
-index 00000000..c9f83f7f
+index 0000000..c9f83f7
 --- /dev/null
 +++ b/src/DX12Interop.h
 @@ -0,0 +1,110 @@
@@ -2156,7 +2156,7 @@ index 00000000..c9f83f7f
 +};
 diff --git a/src/DX12Interop/InteropContext.h b/src/DX12Interop/InteropContext.h
 new file mode 100644
-index 00000000..1f7a8f3a
+index 0000000..1f7a8f3
 --- /dev/null
 +++ b/src/DX12Interop/InteropContext.h
 @@ -0,0 +1,80 @@
@@ -2243,7 +2243,7 @@ index 00000000..1f7a8f3a
 \ No newline at end of file
 diff --git a/src/DX12Interop/WrappedResource.cpp b/src/DX12Interop/WrappedResource.cpp
 new file mode 100644
-index 00000000..94226190
+index 0000000..9422619
 --- /dev/null
 +++ b/src/DX12Interop/WrappedResource.cpp
 @@ -0,0 +1,133 @@
@@ -2383,7 +2383,7 @@ index 00000000..94226190
 \ No newline at end of file
 diff --git a/src/DX12Interop/WrappedResource.h b/src/DX12Interop/WrappedResource.h
 new file mode 100644
-index 00000000..d4f4b880
+index 0000000..d4f4b88
 --- /dev/null
 +++ b/src/DX12Interop/WrappedResource.h
 @@ -0,0 +1,27 @@
@@ -2416,7 +2416,7 @@ index 00000000..d4f4b880
 +};
 \ No newline at end of file
 diff --git a/src/Deferred.cpp b/src/Deferred.cpp
-index f53d621c..5a9c3916 100644
+index f53d621..5a9c391 100644
 --- a/src/Deferred.cpp
 +++ b/src/Deferred.cpp
 @@ -6,15 +6,16 @@
@@ -2557,7 +2557,7 @@ index f53d621c..5a9c3916 100644
  			defines.push_back({ "IBL", nullptr });
  
 diff --git a/src/Feature.cpp b/src/Feature.cpp
-index d9448a2b..3cb0ecbd 100644
+index d9448a2..3cb0ecb 100644
 --- a/src/Feature.cpp
 +++ b/src/Feature.cpp
 @@ -23,7 +23,9 @@
@@ -2580,7 +2580,7 @@ index d9448a2b..3cb0ecbd 100644
  		&globals::features::screenshotFeature,
  		&globals::features::linearLighting,
 diff --git a/src/FeatureBuffer.cpp b/src/FeatureBuffer.cpp
-index 73aac7c5..f0560881 100644
+index 73aac7c..f056088 100644
 --- a/src/FeatureBuffer.cpp
 +++ b/src/FeatureBuffer.cpp
 @@ -14,6 +14,7 @@
@@ -2602,7 +2602,7 @@ index 73aac7c5..f0560881 100644
 \ No newline at end of file
 +}
 diff --git a/src/Features/CloudShadows.h b/src/Features/CloudShadows.h
-index fa870c3e..a7ca1d97 100644
+index fa870c3..a7ca1d9 100644
 --- a/src/Features/CloudShadows.h
 +++ b/src/Features/CloudShadows.h
 @@ -13,6 +13,7 @@ public:
@@ -2614,7 +2614,7 @@ index fa870c3e..a7ca1d97 100644
  	Settings settings;
  
 diff --git a/src/Features/DynamicCubemaps.h b/src/Features/DynamicCubemaps.h
-index 61bb102a..29bca6aa 100644
+index 61bb102..29bca6a 100644
 --- a/src/Features/DynamicCubemaps.h
 +++ b/src/Features/DynamicCubemaps.h
 @@ -136,6 +136,7 @@ public:
@@ -2626,7 +2626,7 @@ index 61bb102a..29bca6aa 100644
  	Settings settings;
  	void UpdateCubemap();
 diff --git a/src/Features/ExtendedTranslucency.h b/src/Features/ExtendedTranslucency.h
-index c095b227..f37675c9 100644
+index c095b22..f37675c 100644
 --- a/src/Features/ExtendedTranslucency.h
 +++ b/src/Features/ExtendedTranslucency.h
 @@ -63,6 +63,7 @@ struct ExtendedTranslucency final : Feature
@@ -2638,7 +2638,7 @@ index c095b227..f37675c9 100644
  	// Settings only in CPU
  	struct Settings : PerFrame
 diff --git a/src/Features/HairSpecular.h b/src/Features/HairSpecular.h
-index 546b80d0..8a217860 100644
+index 546b80d..8a21786 100644
 --- a/src/Features/HairSpecular.h
 +++ b/src/Features/HairSpecular.h
 @@ -52,6 +52,7 @@ public:
@@ -2649,20 +2649,8 @@ index 546b80d0..8a217860 100644
  
  	eastl::unique_ptr<Texture2D> texTangentShift = nullptr;
  
-diff --git a/src/Features/IBL.h b/src/Features/IBL.h
-index fdb2a6f8..e0d52829 100644
---- a/src/Features/IBL.h
-+++ b/src/Features/IBL.h
-@@ -63,6 +63,7 @@ public:
- 		bool DisableInWorldMap = true;
- 		bool DisableInLoadingScreen = true;
- 	} settings;
-+	STATIC_ASSERT_ALIGNAS_16(Settings);
- 
- 	struct alignas(16) PerFrame
- 	{
 diff --git a/src/Features/InverseSquareLighting.cpp b/src/Features/InverseSquareLighting.cpp
-index bf703731..86b20301 100644
+index bf70373..86b2030 100644
 --- a/src/Features/InverseSquareLighting.cpp
 +++ b/src/Features/InverseSquareLighting.cpp
 @@ -1,7 +1,7 @@
@@ -2689,7 +2677,7 @@ index bf703731..86b20301 100644
  	if (bsLight->pointLight && isInvSq) {
  		const float intensity = runtimeData->fade * 4;
 diff --git a/src/Features/LODBlending.h b/src/Features/LODBlending.h
-index ae98db39..98b7076d 100644
+index ae98db3..98b7076 100644
 --- a/src/Features/LODBlending.h
 +++ b/src/Features/LODBlending.h
 @@ -31,6 +31,7 @@ struct LODBlending : Feature
@@ -2701,7 +2689,7 @@ index ae98db39..98b7076d 100644
  	Settings settings;
  
 diff --git a/src/Features/PerformanceOverlay.cpp b/src/Features/PerformanceOverlay.cpp
-index e20e3afc..09b384ea 100644
+index e20e3af..09b384e 100644
 --- a/src/Features/PerformanceOverlay.cpp
 +++ b/src/Features/PerformanceOverlay.cpp
 @@ -21,6 +21,7 @@
@@ -2729,7 +2717,7 @@ index e20e3afc..09b384ea 100644
  
 diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
 new file mode 100644
-index 00000000..9da30595
+index 0000000..9da3059
 --- /dev/null
 +++ b/src/Features/Raytracing.cpp
 @@ -0,0 +1,1723 @@
@@ -4458,7 +4446,7 @@ index 00000000..9da30595
 +}
 diff --git a/src/Features/Raytracing.h b/src/Features/Raytracing.h
 new file mode 100644
-index 00000000..f0ad8e4d
+index 0000000..f0ad8e4
 --- /dev/null
 +++ b/src/Features/Raytracing.h
 @@ -0,0 +1,408 @@
@@ -4872,7 +4860,7 @@ index 00000000..f0ad8e4d
 +};
 diff --git a/src/Features/SceneGraphExplorer.cpp b/src/Features/SceneGraphExplorer.cpp
 new file mode 100644
-index 00000000..9be4577b
+index 0000000..9be4577
 --- /dev/null
 +++ b/src/Features/SceneGraphExplorer.cpp
 @@ -0,0 +1,182 @@
@@ -5061,7 +5049,7 @@ index 00000000..9be4577b
 \ No newline at end of file
 diff --git a/src/Features/SceneGraphExplorer.h b/src/Features/SceneGraphExplorer.h
 new file mode 100644
-index 00000000..1ebf3933
+index 0000000..1ebf393
 --- /dev/null
 +++ b/src/Features/SceneGraphExplorer.h
 @@ -0,0 +1,75 @@
@@ -5141,7 +5129,7 @@ index 00000000..1ebf3933
 +	} settings;
 +};
 diff --git a/src/Features/ScreenshotFeature.cpp b/src/Features/ScreenshotFeature.cpp
-index 8c034b96..576724d0 100644
+index 8c034b9..576724d 100644
 --- a/src/Features/ScreenshotFeature.cpp
 +++ b/src/Features/ScreenshotFeature.cpp
 @@ -18,7 +18,7 @@
@@ -5162,7 +5150,7 @@ index 8c034b96..576724d0 100644
  			// Recompose from the clean scene with no UI buffer.
  			auto& hdr = globals::features::hdrDisplay;
 diff --git a/src/Features/Skin.cpp b/src/Features/Skin.cpp
-index 5e953ff6..9454600a 100644
+index 5e953ff..9454600 100644
 --- a/src/Features/Skin.cpp
 +++ b/src/Features/Skin.cpp
 @@ -7,6 +7,7 @@
@@ -5207,7 +5195,7 @@ index 5e953ff6..9454600a 100644
  
  void Skin::SetupResources()
 diff --git a/src/Features/Skylighting.h b/src/Features/Skylighting.h
-index 5685f463..991ec878 100644
+index 5685f46..991ec87 100644
 --- a/src/Features/Skylighting.h
 +++ b/src/Features/Skylighting.h
 @@ -71,7 +71,7 @@ public:
@@ -5220,7 +5208,7 @@ index 5685f463..991ec878 100644
  	/**
  	 * @brief Builds the skylighting constant buffer data from current probe array state.
 diff --git a/src/Features/TerrainBlending.cpp b/src/Features/TerrainBlending.cpp
-index ae15b0f8..ed8877b3 100644
+index ae15b0f..ed8877b 100644
 --- a/src/Features/TerrainBlending.cpp
 +++ b/src/Features/TerrainBlending.cpp
 @@ -1,6 +1,7 @@
@@ -5271,7 +5259,7 @@ index ae15b0f8..ed8877b3 100644
  		renderTerrainDepth = false;
  		renderAltTerrain = false;
 diff --git a/src/Features/TerrainBlending.h b/src/Features/TerrainBlending.h
-index baaae065..85d72924 100644
+index baaae06..85d7292 100644
 --- a/src/Features/TerrainBlending.h
 +++ b/src/Features/TerrainBlending.h
 @@ -80,6 +80,8 @@ public:
@@ -5284,7 +5272,7 @@ index baaae065..85d72924 100644
  
  	/** @brief Clears the terrain depth stencil buffer to prepare for a new depth pass. */
 diff --git a/src/Features/Upscaling.cpp b/src/Features/Upscaling.cpp
-index 92d1b43f..418b0da2 100644
+index 92d1b43..418b0da 100644
 --- a/src/Features/Upscaling.cpp
 +++ b/src/Features/Upscaling.cpp
 @@ -1,8 +1,10 @@
@@ -6151,7 +6139,7 @@ index 92d1b43f..418b0da2 100644
  
  	Util::SetTemporal(upscaleMethod == UpscaleMethod::kTAA);
 diff --git a/src/Features/Upscaling.h b/src/Features/Upscaling.h
-index 98be1a62..5f118c6f 100644
+index 98be1a6..5f118c6 100644
 --- a/src/Features/Upscaling.h
 +++ b/src/Features/Upscaling.h
 @@ -40,18 +40,19 @@ public:
@@ -6249,7 +6237,7 @@ index 98be1a62..5f118c6f 100644
  	void CreateProxyInterop();
  	IDXGISwapChain* GetProxySwapChain();
 diff --git a/src/Features/Upscaling/DX12SwapChain.cpp b/src/Features/Upscaling/DX12SwapChain.cpp
-index b607e4a6..77f5077b 100644
+index b607e4a..77f5077 100644
 --- a/src/Features/Upscaling/DX12SwapChain.cpp
 +++ b/src/Features/Upscaling/DX12SwapChain.cpp
 @@ -8,28 +8,11 @@
@@ -6572,7 +6560,7 @@ index b607e4a6..77f5077b 100644
 -	motionVectorBufferShared12 = new WrappedResource(texDesc, d3d11Device.get(), d3d12Device.get());
 -}
 diff --git a/src/Features/Upscaling/DX12SwapChain.h b/src/Features/Upscaling/DX12SwapChain.h
-index 127f6b66..e63507a1 100644
+index 127f6b6..e63507a 100644
 --- a/src/Features/Upscaling/DX12SwapChain.h
 +++ b/src/Features/Upscaling/DX12SwapChain.h
 @@ -11,18 +11,9 @@
@@ -6662,7 +6650,7 @@ index 127f6b66..e63507a1 100644
 -	void CreateSharedResources();
  };
 diff --git a/src/Features/Upscaling/FidelityFX.cpp b/src/Features/Upscaling/FidelityFX.cpp
-index 1e191972..9df97b08 100644
+index 1e19197..9df97b0 100644
 --- a/src/Features/Upscaling/FidelityFX.cpp
 +++ b/src/Features/Upscaling/FidelityFX.cpp
 @@ -6,6 +6,7 @@
@@ -6731,7 +6719,7 @@ index 1e191972..9df97b08 100644
  		ffx::DispatchDescFrameGenerationPrepareCameraInfo cameraConfig{};
  
 diff --git a/src/Features/Upscaling/FidelityFX.h b/src/Features/Upscaling/FidelityFX.h
-index 52b3719d..89ac3e18 100644
+index 52b3719..89ac3e1 100644
 --- a/src/Features/Upscaling/FidelityFX.h
 +++ b/src/Features/Upscaling/FidelityFX.h
 @@ -52,12 +52,7 @@ public:
@@ -6749,7 +6737,7 @@ index 52b3719d..89ac3e18 100644
  	/** @brief Creates FSR3 upscaling resources including scratch buffers and context. */
  	void CreateFSRResources();
 diff --git a/src/Features/Upscaling/Streamline.cpp b/src/Features/Upscaling/Streamline.cpp
-index 33c3311a..f112841b 100644
+index 33c3311..f112841 100644
 --- a/src/Features/Upscaling/Streamline.cpp
 +++ b/src/Features/Upscaling/Streamline.cpp
 @@ -11,6 +11,7 @@
@@ -7243,7 +7231,7 @@ index 33c3311a..f112841b 100644
  {
  	if (!initialized || !reflexSupportedOnCurrentAdapter || !featureReflex || !slReflexSetOptions)
 diff --git a/src/Features/Upscaling/Streamline.h b/src/Features/Upscaling/Streamline.h
-index 36c7587d..c551f46d 100644
+index 36c7587..c551f46 100644
 --- a/src/Features/Upscaling/Streamline.h
 +++ b/src/Features/Upscaling/Streamline.h
 @@ -14,6 +14,7 @@
@@ -7352,7 +7340,7 @@ index 36c7587d..c551f46d 100644
 +
 +DEFINE_ENUM_FLAG_OPERATORS(Streamline::Features);
 diff --git a/src/Globals.cpp b/src/Globals.cpp
-index 67642e58..f8b33cb3 100644
+index 67642e5..f8b33cb 100644
 --- a/src/Globals.cpp
 +++ b/src/Globals.cpp
 @@ -1,6 +1,8 @@
@@ -7408,7 +7396,7 @@ index 67642e58..f8b33cb3 100644
  
  	void ReInit()
 diff --git a/src/Globals.h b/src/Globals.h
-index 5a13a4a9..a42e68c9 100644
+index 5a13a4a..a42e68c 100644
 --- a/src/Globals.h
 +++ b/src/Globals.h
 @@ -3,6 +3,7 @@
@@ -7453,7 +7441,7 @@ index 5a13a4a9..a42e68c9 100644
 \ No newline at end of file
 +}
 diff --git a/src/Hooks.cpp b/src/Hooks.cpp
-index f5785142..4cfd1fb9 100644
+index f578514..4cfd1fb 100644
 --- a/src/Hooks.cpp
 +++ b/src/Hooks.cpp
 @@ -13,13 +13,16 @@
@@ -7531,7 +7519,7 @@ index f5785142..4cfd1fb9 100644
 +	}
  }
 diff --git a/src/Hooks.h b/src/Hooks.h
-index 66d5bb3c..96270bce 100644
+index 66d5bb3..96270bc 100644
 --- a/src/Hooks.h
 +++ b/src/Hooks.h
 @@ -28,4 +28,5 @@ namespace Hooks
@@ -7541,7 +7529,7 @@ index 66d5bb3c..96270bce 100644
 +	uint CubemapResolution();
  }
 diff --git a/src/Menu/AdvancedSettingsRenderer.cpp b/src/Menu/AdvancedSettingsRenderer.cpp
-index 79f7f9c8..25ffe473 100644
+index 79f7f9c..25ffe47 100644
 --- a/src/Menu/AdvancedSettingsRenderer.cpp
 +++ b/src/Menu/AdvancedSettingsRenderer.cpp
 @@ -7,6 +7,7 @@
@@ -7581,7 +7569,7 @@ index 79f7f9c8..25ffe473 100644
  	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
  	if (ImGui::Checkbox(T("menu.advanced.half_precision", "Half Precision (Partial Precision)"), &partialPrecision)) {
 diff --git a/src/State.cpp b/src/State.cpp
-index f5d81e8f..49544815 100644
+index f5d81e8..4954481 100644
 --- a/src/State.cpp
 +++ b/src/State.cpp
 @@ -4,6 +4,7 @@
@@ -7628,7 +7616,7 @@ index f5d81e8f..49544815 100644
  
  	if (settings.contains("General") && settings["General"].is_object()) {
 diff --git a/src/State.h b/src/State.h
-index ce6841d2..299abda9 100644
+index ce6841d..299abda 100644
 --- a/src/State.h
 +++ b/src/State.h
 @@ -207,6 +207,12 @@ public:
@@ -7645,7 +7633,7 @@ index ce6841d2..299abda9 100644
  	// mostly belt-and-braces in SM5, but it lets the compiler downgrade unmarked float
  	// ops to FP16 where it can prove safety. On by default; toggle off when reversing
 diff --git a/src/Utils/Game.cpp b/src/Utils/Game.cpp
-index 3b285fdc..7adb5248 100644
+index 3b285fd..7adb524 100644
 --- a/src/Utils/Game.cpp
 +++ b/src/Utils/Game.cpp
 @@ -186,12 +186,23 @@ namespace Util
@@ -7674,7 +7662,7 @@ index 3b285fdc..7adb5248 100644
  	{
  		auto viewport = globals::game::graphicsState;
 diff --git a/src/Utils/Game.h b/src/Utils/Game.h
-index a0ab22f9..b31ef462 100644
+index a0ab22f..b31ef46 100644
 --- a/src/Utils/Game.h
 +++ b/src/Utils/Game.h
 @@ -37,6 +37,7 @@ namespace Util
