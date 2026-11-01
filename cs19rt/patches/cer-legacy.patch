@@ -571,7 +571,7 @@ index 621a60a..e6771c7 100644
 \ No newline at end of file
 +}
 diff --git a/src/Pass/NRD/NRDIntegration.cpp b/src/Pass/NRD/NRDIntegration.cpp
-index 48392df..ad6e6b6 100644
+index 48392df..b5c9adf 100644
 --- a/src/Pass/NRD/NRDIntegration.cpp
 +++ b/src/Pass/NRD/NRDIntegration.cpp
 @@ -100,6 +100,8 @@ namespace Pass::NRD
@@ -583,15 +583,16 @@ index 48392df..ad6e6b6 100644
  		CreateBindingLayouts();
  		CreatePipelines();
  		CreateResources();
-@@ -252,6 +254,7 @@ namespace Pass::NRD
+@@ -252,6 +254,8 @@ namespace Pass::NRD
  
  	void NRDIntegration::CreateResources()
  	{
 +        m_ResetHistory = true;
++        m_ResetReason = "resources created";
  		if (!m_NRD)
  			return;
  
-@@ -368,12 +371,14 @@ namespace Pass::NRD
+@@ -368,12 +372,17 @@ namespace Pass::NRD
  
  	void NRDIntegration::SettingsChanged(const Settings& settings)
  	{
@@ -602,11 +603,14 @@ index 48392df..ad6e6b6 100644
  			m_Enabled = (settings.GeneralSettings.Denoiser == Denoiser::NRD_Reblur);
  
  		UpdateSettings(settings);
-+        if (wasEnabled != m_Enabled) m_ResetHistory = true;
++        if (wasEnabled != m_Enabled) {
++            m_ResetHistory = true;
++            m_ResetReason = "denoiser switched";
++        }
  	}
  
  	void NRDIntegration::UpdateSettings(const Settings& settings)
-@@ -614,7 +619,20 @@ namespace Pass::NRD
+@@ -614,7 +623,23 @@ namespace Pass::NRD
  			m_SettingsDirty = false;
  		}
  
@@ -623,12 +627,15 @@ index 48392df..ad6e6b6 100644
 +            std::memcpy(m_CommonSettings.resourceSizePrev, m_CommonSettings.resourceSize, sizeof(m_CommonSettings.resourceSize));
 +            std::memcpy(m_CommonSettings.rectSizePrev, m_CommonSettings.rectSize, sizeof(m_CommonSettings.rectSize));
 +            std::memcpy(m_CommonSettings.cameraJitterPrev, m_CommonSettings.cameraJitter, sizeof(m_CommonSettings.cameraJitter));
-+            logger::info("RTLab NRD history reset: frame={}, resources={}", m_CommonSettings.frameIndex, m_ResetHistory);
++            if (m_ResetHistory)
++                logger::info("RTLab NRD history reset: frame={}, reason={}", m_CommonSettings.frameIndex, m_ResetReason);
++            else
++                logger::info("RTLab NRD history reset: frame={}, reason=frame gap (last denoised frame {})", m_CommonSettings.frameIndex, m_LastHistoryFrame);
 +        }
  
  		const nrd::Result commonSettingsResult = nrd::SetCommonSettings(*m_NRD, m_CommonSettings);
  		if (commonSettingsResult != nrd::Result::SUCCESS) {
-@@ -750,5 +768,8 @@ namespace Pass::NRD
+@@ -750,5 +775,8 @@ namespace Pass::NRD
  
  			commandList->endMarker();
  		}
@@ -638,14 +645,15 @@ index 48392df..ad6e6b6 100644
  	}
  }
 diff --git a/src/Pass/NRD/NRDIntegration.h b/src/Pass/NRD/NRDIntegration.h
-index 4ffd080..974eff2 100644
+index 4ffd080..cf6aed9 100644
 --- a/src/Pass/NRD/NRDIntegration.h
 +++ b/src/Pass/NRD/NRDIntegration.h
-@@ -55,6 +55,8 @@ namespace Pass::NRD
+@@ -55,6 +55,9 @@ namespace Pass::NRD
  		eastl::vector<DispatchBindingCache> m_DispatchBindingCaches;
  
  		bool m_ResourcesDirty = true;
 +        bool m_ResetHistory = true;
++        const char* m_ResetReason = "pass created";  // RTLab: why m_ResetHistory was set, for the log
 +        uint32_t m_LastHistoryFrame = 0;
  		bool m_SettingsDirty = true;
  

@@ -1,0 +1,392 @@
+diff --git a/src/Core/TextureManager.cpp b/src/Core/TextureManager.cpp
+index b51563c..5bc3bd8 100644
+--- a/src/Core/TextureManager.cpp
++++ b/src/Core/TextureManager.cpp
+@@ -1,6 +1,8 @@
+ #include "TextureManager.h"
+ #include "Renderer.h"
+ 
++#include <chrono>
++
+ TextureReference::TextureReference(nvrhi::TextureHandle texture, DescriptorTableManager* descriptorTableManager) :
+ 	texture(texture)
+ {
+@@ -73,6 +75,26 @@ eastl::shared_ptr<DescriptorHandle> TextureManager::GetDescriptor(RE::BSGraphics
+ 			return refIt->second->descriptorHandle;
+ 	}
+ 
++	// RTLab: count and time every cache miss (all return paths) for the stutter log.
++	struct ShareStat
++	{
++		explicit ShareStat(TextureManager& a_manager) :
++			manager(a_manager), start(std::chrono::high_resolution_clock::now())
++		{}
++		ShareStat(const ShareStat&) = delete;
++		ShareStat& operator=(const ShareStat&) = delete;
++
++		~ShareStat()
++		{
++			const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - start).count();
++			manager.m_ShareCount.fetch_add(1, std::memory_order_relaxed);
++			manager.m_ShareMicroseconds.fetch_add(static_cast<uint64_t>(micros), std::memory_order_relaxed);
++		}
++
++		TextureManager& manager;
++		std::chrono::high_resolution_clock::time_point start;
++	} shareStat{ *this };
++
+ 	// Share texture from DX11 to DX12
+ 	auto d3d11Texture = reinterpret_cast<ID3D11Texture2D*>(d3d11Resource);
+ 
+diff --git a/src/Core/TextureManager.h b/src/Core/TextureManager.h
+index f341ca1..c933fe8 100644
+--- a/src/Core/TextureManager.h
++++ b/src/Core/TextureManager.h
+@@ -4,6 +4,8 @@
+ #include "Framework/DescriptorTableManager.h"
+ #include "Types/BindlessTableManager.h"
+ 
++#include <atomic>
++
+ struct TextureReference
+ {
+ 	nvrhi::TextureHandle texture;
+@@ -30,6 +32,16 @@ struct TextureManager
+ 	eastl::unique_ptr<BindlessTableManager> m_TextureDescriptors;
+ 	eastl::unique_ptr<BindlessTableManager> m_CubemapDescriptors;
+ 
++	// RTLab: textures shared DX11->DX12 (cache misses in GetDescriptor) since the last TakeShareStats().
++	std::atomic<uint32_t> m_ShareCount{ 0 };
++	std::atomic<uint64_t> m_ShareMicroseconds{ 0 };
++
++	void TakeShareStats(uint32_t& a_count, float& a_ms)
++	{
++		a_count = m_ShareCount.exchange(0, std::memory_order_relaxed);
++		a_ms = static_cast<float>(m_ShareMicroseconds.exchange(0, std::memory_order_relaxed)) / 1000.0f;
++	}
++
+ 	TextureManager();
+ 	uint64_t GetFakeDoubledVRAMUsage();
+ 	eastl::shared_ptr<DescriptorHandle> GetDescriptor(RE::BSGraphics::Texture* texture, TextureType textureType = TextureType::Standard);
+diff --git a/src/Renderer.cpp b/src/Renderer.cpp
+index fbb69d0..8ec0fc7 100644
+--- a/src/Renderer.cpp
++++ b/src/Renderer.cpp
+@@ -5,6 +5,8 @@
+ 
+ #include <Rtxdi/RtxdiUtils.h>
+ 
++#include <chrono>
++
+ #include "Renderer/RenderNode.h"
+ #include "interop/PackedSurfaceData.hlsli"
+ 
+@@ -536,8 +538,11 @@ nvrhi::ICommandList* Renderer::StartExecution()
+ 
+ 	auto& slot = m_FrameSlots[m_CurrentSlot];
+ 
++	m_LastSlotWaitMs = 0.0f;
+ 	if (slot.inFlight) {
++		const auto waitStart = std::chrono::high_resolution_clock::now();
+ 		device->waitEventQuery(slot.eventQuery);
++		m_LastSlotWaitMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - waitStart).count();
+ 		RunPostExecutionForSlot(m_CurrentSlot);
+ 		device->resetEventQuery(slot.eventQuery);
+ 		slot.inFlight = false;
+diff --git a/src/Renderer.h b/src/Renderer.h
+index b338172..31f55f0 100644
+--- a/src/Renderer.h
++++ b/src/Renderer.h
+@@ -238,6 +238,10 @@ public:
+ 	inline void SetFrameCpuTime(uint32_t slot, float ms) { m_FrameCpuTimes[slot] = ms; }
+ 	inline float GetFrameCpuTime(uint32_t slot) const { return m_FrameCpuTimes[slot]; }
+ 
++	// RTLab: how long StartExecution waited for the GPU to release this frame's slot.
++	inline float GetLastSlotWaitMs() const { return m_LastSlotWaitMs; }
++	float m_LastSlotWaitMs = 0.0f;
++
+ 	inline auto GetJitter() const { return m_Jitter; }
+ 
+ 	inline auto GetPrevJitter() const { return m_PrevJitter; }
+diff --git a/src/Scene.cpp b/src/Scene.cpp
+index 7844daf..c2c3f5d 100644
+--- a/src/Scene.cpp
++++ b/src/Scene.cpp
+@@ -36,6 +36,50 @@
+ #include "Pass/Raytracing/Common/TransformComposition.h"
+ #include "Pass/Raytracing/Common/PTComposite.h"
+ 
++namespace
++{
++	// RTLab stutter log: one line when the RT backend's own CPU work in a frame is unusually long, or
++	// when it had to wait unusually long for the GPU (a GPU-side hitch such as a burst of BLAS builds).
++	// The normal GPU-bound wait is not a spike. At most one line every kRTLabSpikeLogInterval.
++	// Read-only: it only reports what the frame did.
++	constexpr float kRTLabSpikeCpuMs = 8.0f;
++	constexpr float kRTLabSpikeGpuWaitMs = 25.0f;
++	constexpr auto kRTLabSpikeLogInterval = std::chrono::milliseconds(500);
++
++	void LogRTLabFrameSpike(SceneGraph* a_sceneGraph, Renderer* a_renderer,
++		std::chrono::high_resolution_clock::time_point a_frameStart,
++		std::chrono::high_resolution_clock::time_point a_submitStart)
++	{
++		using Clock = std::chrono::high_resolution_clock;
++		static Clock::time_point lastLog{};
++
++		// Drained every frame so the count belongs to this frame.
++		uint32_t sharedTextures = 0;
++		float shareMs = 0.0f;
++		a_sceneGraph->GetTextureManager()->TakeShareStats(sharedTextures, shareMs);
++
++		const auto now = Clock::now();
++		const float totalMs = std::chrono::duration<float, std::milli>(now - a_frameStart).count();
++		const float waitMs = a_renderer->GetLastSlotWaitMs();
++		const bool spike = (totalMs - waitMs) >= kRTLabSpikeCpuMs || waitMs >= kRTLabSpikeGpuWaitMs;
++		if (!spike || now - lastLog < kRTLabSpikeLogInterval)
++			return;
++		lastLog = now;
++
++		const auto& stats = a_sceneGraph->GetFrameStats();
++		const float submitMs = std::chrono::duration<float, std::milli>(now - a_submitStart).count();
++		const float passesMs = totalMs - waitMs - stats.updateMs - submitMs;
++
++		logger::info(
++			"RTLab frame spike {:.1f} ms (frame {}): GPU wait {:.1f} | scene update {:.1f} = traversal {:.1f} + mesh update {:.1f}"
++			" + new meshes {:.1f} ({} created, {} deferred) + materials {:.1f} + clusters {:.1f}"
++			" | passes {:.1f} incl. BLAS {:.1f} ({} dirty clusters) | textures shared {} in {:.1f} ms | submit {:.1f}",
++			totalMs, a_renderer->GetFrameIndex(), waitMs, stats.updateMs, stats.traversalMs, stats.parallelMs,
++			stats.createMs, stats.created, stats.deferred, stats.materialMs, stats.clusterMs,
++			passesMs, stats.buildClustersMs, stats.dirtyClusters, sharedTextures, shareMs, submitMs);
++	}
++}
++
+ Scene::Scene()
+ {
+ 	m_SceneGraph = eastl::make_unique<SceneGraph>();
+@@ -191,6 +235,8 @@ void Scene::Execute()
+ 	if (!m_Settings.Enabled || m_Settings.GeneralSettings.Mode == Mode::None)
+ 		return;
+ 
++	const auto rtlabFrameStart = std::chrono::high_resolution_clock::now();
++
+ 	auto* sceneGraph = GetSceneGraph();
+ 
+ 	sceneGraph->UpdateCamera();
+@@ -238,7 +284,11 @@ void Scene::Execute()
+ 		renderer->RenderTargetManager().CopySharedTextures(commandList, currentSlot);
+ 	}
+ 
++	const auto rtlabSubmitStart = std::chrono::high_resolution_clock::now();
++
+ 	renderer->EndExecution();
++
++	LogRTLabFrameSpike(sceneGraph, renderer, rtlabFrameStart, rtlabSubmitStart);
+ }
+ 
+ void Scene::UpdateCameraData() const
+diff --git a/src/SceneGraph.cpp b/src/SceneGraph.cpp
+index 1f296e2..bab53cf 100644
+--- a/src/SceneGraph.cpp
++++ b/src/SceneGraph.cpp
+@@ -21,9 +21,19 @@
+ #include "Core/Mesh/SubIndexSegmentMesh.h"
+ #include "Core/ParallelTriShapeWalker.h"
+ 
++#include <algorithm>
++#include <bit>
+ #include <chrono>
+ #include <numbers>
+ 
++namespace
++{
++	// RTLab: CPU time per frame for creating the RT meshes of newly streamed shapes (Phase C2).
++	// At least kRTLabMinCreatesPerFrame shapes are created every frame so the backlog always drains.
++	constexpr float kRTLabCreateBudgetMs = 2.5f;
++	constexpr size_t kRTLabMinCreatesPerFrame = 4;
++}
++
+ void SceneGraph::Initialize()
+ {
+ 	const auto maxThreads = std::thread::hardware_concurrency() - 1u;
+@@ -394,6 +404,16 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 	const auto updateStart = std::chrono::high_resolution_clock::now();
+ 	auto phaseStart = updateStart;
+ 
++	// RTLab: always-on phase laps for the stutter log (independent of the debug timings below).
++	m_FrameStats = {};
++	auto rtlabMark = updateStart;
++	auto rtlabLap = [&rtlabMark]() {
++		const auto now = std::chrono::high_resolution_clock::now();
++		const float ms = std::chrono::duration<float, std::milli>(now - rtlabMark).count();
++		rtlabMark = now;
++		return ms;
++	};
++
+ 	UpdateLights(commandList);
+ 
+ 	const auto timings = Scene::GetSingleton()->m_Settings.DebugSettings.Timings == TimingMode::Extended;
+@@ -453,6 +473,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 
+ 	const auto frameIndex = Renderer::GetSingleton()->GetFrameIndex();
+ 
++	rtlabLap();  // lights and mesh destroys are not part of the traversal lap
++
+ 	// Phase A: Parallel recursive traversal — collect into update/create lists, skip heavy processing.
+ 	//
+ 	// Replaces the previous serial walk + the (now-removed) Phase 0 FadeNode collection. Strategy:
+@@ -570,6 +592,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 		phaseStart = nowTp;
+ 	}
+ 
++	m_FrameStats.traversalMs = rtlabLap();
++
+ 	// Phase B + C1 (parallel): Update known meshes AND filter new meshes via thread pool
+ 	{
+ 		const size_t numWorkers = std::max<size_t>(1, m_ThreadPool->GetThreadCount());
+@@ -722,8 +746,47 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 		phaseStart = nowTp;
+ 	}
+ 
++	m_FrameStats.parallelMs = rtlabLap();
++
+ 	// Phase C2 (serial): GPU resource creation for validated candidates
+-	for (auto& [bsTriShape, refr] : m_CreateCandidates) {
++	//
++	// RTLab: a streamed cell can bring hundreds of new shapes in a single frame. Creating all of their
++	// RT meshes, materials (DX11->DX12 texture sharing) and BLAS in that frame is a visible hitch, so
++	// this phase spends at most kRTLabCreateBudgetMs per frame on it, nearest shapes first. Shapes left
++	// over are not in m_Meshes yet, so the next frame's traversal collects them again. While a loading
++	// screen is up nothing of the world is shown, so the whole backlog is created there without a budget.
++	const bool rtlabNoBudget = !Scene::GetSingleton()->GetMenuState().none(MenuState::LoadingMenu);
++	if (!rtlabNoBudget && m_CreateCandidates.size() > kRTLabMinCreatesPerFrame) {
++		// Distances are snapshotted as integer keys before sorting: transforms may move meanwhile and
++		// std::sort needs a consistent order. The bit pattern of a non-negative float orders like its
++		// value, and a NaN simply sorts last.
++		const auto eye = Util::Adapter::GetCameraEyePosition();
++		m_CreateOrder.clear();
++		m_CreateOrder.reserve(m_CreateCandidates.size());
++		for (const auto& candidate : m_CreateCandidates) {
++			const auto& position = candidate.bsTriShape->world.translate;
++			const float dx = position.x - eye.x;
++			const float dy = position.y - eye.y;
++			const float dz = position.z - eye.z;
++			m_CreateOrder.push_back(eastl::make_pair(std::bit_cast<uint32_t>(dx * dx + dy * dy + dz * dz), candidate));
++		}
++		std::sort(m_CreateOrder.begin(), m_CreateOrder.end(),
++			[](const auto& a_lhs, const auto& a_rhs) { return a_lhs.first < a_rhs.first; });
++		for (size_t sortedIndex = 0; sortedIndex < m_CreateOrder.size(); ++sortedIndex)
++			m_CreateCandidates[sortedIndex] = m_CreateOrder[sortedIndex].second;
++	}
++
++	const auto createStart = std::chrono::high_resolution_clock::now();
++	size_t createdCount = 0;
++	for (size_t candidateIndex = 0; candidateIndex < m_CreateCandidates.size(); ++candidateIndex) {
++		if (!rtlabNoBudget && createdCount >= kRTLabMinCreatesPerFrame &&
++			std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - createStart).count() >= kRTLabCreateBudgetMs) {
++			m_FrameStats.deferred = static_cast<uint32_t>(m_CreateCandidates.size() - candidateIndex);
++			break;
++		}
++		++createdCount;
++
++		auto& [bsTriShape, refr] = m_CreateCandidates[candidateIndex];
+ 		if (auto created = BaseMesh::Create(bsTriShape, commandList)) {
+ 			created->SetOwner(refr);
+ 			auto [it2, inserted] = m_Meshes.emplace(bsTriShape, eastl::move(created));
+@@ -746,6 +809,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 		}
+ 	}
+ 
++	m_FrameStats.created = static_cast<uint32_t>(createdCount);
++	m_FrameStats.createMs = rtlabLap();
++
+ 	if (timings) {
+ 		const auto nowTp = std::chrono::high_resolution_clock::now();
+ 		m_UpdateTimings.push_back({"SG::PhaseC2-Create", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
+@@ -774,9 +840,13 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 		phaseStart = nowTp;
+ 	}
+ 
++	rtlabLap();  // Phase D is cheap; keep it out of the material lap
++
+ 	// Phase E: Material flush
+ 	m_MaterialManager->Flush(commandList);
+ 
++	m_FrameStats.materialMs = rtlabLap();
++
+ 	if (timings) {
+ 		const auto nowTp = std::chrono::high_resolution_clock::now();
+ 		m_UpdateTimings.push_back({"SG::PhaseE-MaterialFlush", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
+@@ -894,6 +964,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 		}
+ 	}
+ 
++	m_FrameStats.clusterMs = rtlabLap();
++
+ 	if (timings) {
+ 		const auto nowTp = std::chrono::high_resolution_clock::now();
+ 		m_UpdateTimings.push_back({"SG::PhaseG-ClusterUpdate", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
+@@ -910,6 +982,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 
+ 	m_MeshManager->Flush(commandList);
+ 
++	m_FrameStats.updateMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - updateStart).count();
++
+ 	if (timings) {
+ 		const auto nowTp = std::chrono::high_resolution_clock::now();
+ 		m_UpdateTimings.push_back({"SG::BufferWrites", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
+@@ -1007,11 +1081,16 @@ void SceneGraph::MarkClusterDirty(BLASCluster* cluster)
+ 
+ void SceneGraph::BuildClusters(nvrhi::ICommandList* commandList)
+ {
++	const auto buildStart = std::chrono::high_resolution_clock::now();
++	m_FrameStats.dirtyClusters = static_cast<uint32_t>(m_DirtyClusters.size());
++
+ 	// Process only clusters that were marked dirty.
+ 	for (auto* cluster : m_DirtyClusters)
+ 		cluster->BuildUpdate(commandList, this);
+-	
++
+ 	m_DirtyClusters.clear();
++
++	m_FrameStats.buildClustersMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - buildStart).count();
+ }
+ 
+ void SceneGraph::ReleaseTexture(RE::BSGraphics::Texture* texture)
+diff --git a/src/SceneGraph.h b/src/SceneGraph.h
+index a54217b..372e2af 100644
+--- a/src/SceneGraph.h
++++ b/src/SceneGraph.h
+@@ -205,7 +205,23 @@ public:
+ 	inline const auto& GetFirstPersonPosition() const { return m_FirstPersonPosition; }
+ 
+ 	inline const auto& GetUpdateTimings() const { return m_UpdateTimings; }
+-	
++
++	// RTLab: per-frame cost of the scene update, always measured, for the stutter log in Scene::Execute.
++	struct FrameStats
++	{
++		float updateMs = 0.0f;
++		float traversalMs = 0.0f;
++		float parallelMs = 0.0f;
++		float createMs = 0.0f;
++		float materialMs = 0.0f;
++		float clusterMs = 0.0f;
++		float buildClustersMs = 0.0f;
++		uint32_t created = 0;
++		uint32_t deferred = 0;
++		uint32_t dirtyClusters = 0;
++	};
++	inline const FrameStats& GetFrameStats() const { return m_FrameStats; }
++
+ 	void OnDestroy(RE::BSTriShape* bsTriShape);
+ 
+ 	void UpdateDynamicData(RE::BSDynamicTriShape* bsDynamicTriShape);
+@@ -230,6 +246,8 @@ public:
+ 
+ private:
+ 	eastl::vector<PassTiming> m_UpdateTimings;
++	FrameStats m_FrameStats;
++	eastl::vector<eastl::pair<uint32_t, MeshCreateCandidate>> m_CreateOrder;  // RTLab: reused sort buffer for Phase C2
+ 
+ 	struct PendingDestroy
+ 	{

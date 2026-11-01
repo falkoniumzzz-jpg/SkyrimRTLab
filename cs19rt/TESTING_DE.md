@@ -33,6 +33,20 @@ Das CS-Menü öffnest du mit **Ende**, dort unter *Raytracing*.
 3. **ReSTIR:** Schalte ReSTIR GI ein und aus.
 4. **Pathtracing → RTGI:** Wechsle von PT auf RTGI. Siehst du Ghosting?
 
+## Nachlade-Ruckler prüfen (Lauf C)
+
+Dieser Build richtet neu geladene Objekte für RT nicht mehr alle im selben Frame ein,
+sondern verteilt sie auf mehrere Frames, die nächsten zuerst.
+
+1. Lauf oder reite mit RT etwa fünf Minuten durch die offene Welt, am besten dieselbe
+   Strecke wie beim letzten Test.
+2. Achte darauf, ob die Ruckler seltener oder kürzer sind.
+3. Nach einem Ladebildschirm kann die RT-Beleuchtung weiter entfernter Objekte einen
+   Moment später erscheinen. Das ist so gewollt.
+
+Längere Frames schreibt der Build selbst als „RTLab frame spike“ in
+`CreationEngineRaytracing.log`.
+
 ## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
 
 1. Drücke **Strg+Umschalt+F12**, solange das Spiel hängt. Crash Logger schreibt dann
