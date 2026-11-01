@@ -1,0 +1,76 @@
+diff --git a/src/XSEPlugin.cpp b/src/XSEPlugin.cpp
+index e8d04c1..50436f9 100644
+--- a/src/XSEPlugin.cpp
++++ b/src/XSEPlugin.cpp
+@@ -4,6 +4,12 @@
+ #include "Plugin.h"
+ #include "AgilitySDK.h"
+ 
++#include <fstream>
++#include <iterator>
++#include <optional>
++#include <string>
++#include <string_view>
++
+ #define DLLEXPORT __declspec(dllexport)
+ 
+ std::list<std::string> errors;
+@@ -73,8 +79,58 @@ void MessageHandler(CESE::MessagingInterface::Message* message)
+ 	}
+ }
+ 
++#if defined(SKYRIM)
++// FalkosLichtspiel: "RT off" must cost nothing. Community Shaders' "Disable at Boot"
++// entry for its Raytracing feature is the single switch. When it is set, this backend
++// installs no hooks (no shared D3D11 resources, no DX12 mesh copies) and stays idle.
++// CS merges top-level keys user-over-default, so the user file's object wins if present.
++static std::optional<bool> ReadRaytracingDisabledAtBoot(const char* a_path)
++{
++	std::ifstream file(a_path, std::ios::binary);
++	if (!file.is_open())
++		return std::nullopt;
++
++	const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
++	const auto section = text.find("\"Disable at Boot\"");
++	if (section == std::string::npos)
++		return std::nullopt;
++
++	const auto open = text.find('{', section);
++	const auto close = open == std::string::npos ? std::string::npos : text.find('}', open);
++	if (close == std::string::npos)
++		return std::nullopt;
++
++	const std::string_view object(text.data() + open, close - open);
++	const auto key = object.find("\"Raytracing\"");
++	if (key == std::string_view::npos)
++		return false;
++
++	auto value = object.find(':', key);
++	if (value == std::string_view::npos)
++		return false;
++	value = object.find_first_not_of(" \t\r\n", value + 1);
++	return value != std::string_view::npos && object.substr(value, 4) == "true";
++}
++
++static bool IsRaytracingDisabledAtBoot()
++{
++	for (const char* path : { PLUGIN_FOLDER "/CommunityShaders/SettingsUser.json", PLUGIN_FOLDER "/CommunityShaders/SettingsDefault.json" }) {
++		if (const auto disabled = ReadRaytracingDisabledAtBoot(path))
++			return *disabled;
++	}
++	return false;
++}
++#endif
++
+ bool Load()
+ {
++#if defined(SKYRIM)
++	if (IsRaytracingDisabledAtBoot()) {
++		logger::info("Raytracing is disabled at boot in Community Shaders; no hooks installed, backend idle.");
++		return true;
++	}
++#endif
++
+ 	auto messaging = CESE::GetMessagingInterface();
+ 	messaging->RegisterListener(MessageHandler);
+ 

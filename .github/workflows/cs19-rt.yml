@@ -1,0 +1,73 @@
+name: FalkosLichtspiel CS 1.9 RT
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/cs19-rt']
+    paths: ['cs19rt/**', 'legacy/scripts/check_*.py', '.github/workflows/cs19-rt.yml']
+permissions:
+  contents: read
+concurrency:
+  group: cs19-rt-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  PYTHONUTF8: '1'
+  GIT_LFS_SKIP_SMUDGE: '1'
+  VCPKG_DISABLE_METRICS: '1'
+jobs:
+  shaders:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python deps
+        run: python -m pip install pyyaml
+      - name: Prepare CS 1.9.0 + RT port and paired CER
+        run: python cs19rt/scripts/prepare.py --skip-submodules
+      - name: Compile CS Lighting/Grass/Composite/RT permutations with FXC
+        run: python cs19rt/scripts/check_cs_shaders.py --cs cs19rt/_work/cs --out cs19rt/out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: CS19-RT-Shader-Evidence
+          path: cs19rt/out/logs
+          retention-days: 14
+  windows:
+    needs: shaders
+    runs-on: windows-2025
+    timeout-minutes: 240
+    env:
+      VCPKG_BINARY_SOURCES: clear
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: python -m pip install cmake==4.2.3 ninja pyyaml
+      - name: Build CS 1.9 RT host, CER backend and MO2 package
+        run: python cs19rt/scripts/build_windows.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: CS19-RT-Build-Evidence
+          path: |
+            cs19rt/out/logs
+            cs19rt/out/*.txt
+            cs19rt/out/*.json
+            legacy/out/logs
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FalkosLichtspiel-CS19-RT-MO2
+          path: cs19rt/out/FalkosLichtspiel-CS19-RT-MO2.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FalkosLichtspiel-CS19-RT-Sources
+          path: cs19rt/out/Corresponding-Source.zip
+          if-no-files-found: error

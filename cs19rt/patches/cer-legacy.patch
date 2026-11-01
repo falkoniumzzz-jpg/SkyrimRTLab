@@ -1,0 +1,1112 @@
+diff --git a/include/PCH.h b/include/PCH.h
+index 3af072c..4e4b18a 100644
+--- a/include/PCH.h
++++ b/include/PCH.h
+@@ -1,12 +1,19 @@
+ #pragma once
+ 
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++
+ #undef DEBUG
+ 
+ #pragma warning(push)
+ 
+ #if defined(SKYRIM)
+-#	include <SKSE/SKSE.h>
+ #	include <RE/Skyrim.h>
++#	include <SKSE/SKSE.h>
+ namespace logger = SKSE::log;
+ #elif defined(FALLOUT4)
+ #	include "F4SE/F4SE.h"
+@@ -104,10 +111,7 @@ namespace logger
+ 
+ #pragma warning(pop)
+ 
+-#define WIN32_LEAN_AND_MEAN
+-#include "Windows.h"
+-
+-#define NOMINMAX
++#include "Windows.h" // Windows policy macros are defined before all includes.
+ 
+ #include <shared_mutex>
+ 
+diff --git a/interop/PackedSurfaceData.hlsli b/interop/PackedSurfaceData.hlsli
+index 7159fb6..34d09b9 100644
+--- a/interop/PackedSurfaceData.hlsli
++++ b/interop/PackedSurfaceData.hlsli
+@@ -133,7 +133,7 @@ PackedSurfaceData PSD_Pack(
+     uint materialFeature, bool hasSpecularTransmission,
+     float viewDepth)
+ {
+-    PackedSurfaceData d;
++    PackedSurfaceData d = (PackedSurfaceData)0;
+     d.posW             = position;
+     d.packedNormal     = PSD_PackOct(normal);
+     d.packedTangent    = PSD_PackOct(tangent);
+diff --git a/interop/ReSTIRGIData.hlsli b/interop/ReSTIRGIData.hlsli
+index 65b8875..f38841e 100644
+--- a/interop/ReSTIRGIData.hlsli
++++ b/interop/ReSTIRGIData.hlsli
+@@ -10,6 +10,10 @@ struct ReSTIRGIData
+ {
+     RTXDI_GIParameters giParams;
+     RTXDI_RuntimeParameters runtimeParams;
++    uint resetHistory;
++    uint historyPad0;
++    uint historyPad1;
++    uint historyPad2;
+ };
+ 
+ #endif // RESTIRGIDATA_HLSLI
+diff --git a/shaders/PostProcess.hlsl b/shaders/PostProcess.hlsl
+index ff59980..cc427c4 100644
+--- a/shaders/PostProcess.hlsl
++++ b/shaders/PostProcess.hlsl
+@@ -33,6 +33,7 @@ RWTexture2D<float>  OutViewDepth             : register(u2);
+ #include "include/Common/BRDF.hlsli"
+ 
+ RWTexture2D<float3> OutSpecularAlbedo        : register(u2);
++RWTexture2D<float3> OutDiffuseAlbedo         : register(u3);
+ #endif
+ 
+ WAVE_SIZE(32)
+@@ -70,10 +71,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+ #endif
+ 
+ #if defined(DLSS_RR)
++    // Every active pixel owns current guide values, including sky/background.
++    OutDiffuseAlbedo[pixelPos] = 0;
++    OutSpecularAlbedo[pixelPos] = 0;
++    OutNormalRoughness[pixelPos] = float4(0, 0, 1, 1);
++    if (depth >= SKY_Z || !all(isfinite(normalRoughness)) ||
++        dot(normalRoughness.xyz, normalRoughness.xyz) < 1e-8f)
++        return;
++
+     const float roughness = PBR::Roughness(saturate(normalRoughness.w), Raytracing.Roughness.x, Raytracing.Roughness.y);
+-    const float3 normal = normalRoughness.xyz;
++    const float3 normal = normalize(normalRoughness.xyz);
+ 
+-    const float3 positionVS = ScreenToViewPosition(sourceUV, depthVS, Camera.NDCToView);
++    // Sampling UVs address the backing texture. Projection UVs address the
++    // rendered viewport, which can be smaller with DLSS/dynamic resolution.
++    const float2 viewUV = (float2(pixelPos) + 0.5f) / scaledSize;
++    const float3 positionVS = ScreenToViewPosition(viewUV, depthVS, Camera.NDCToView);
+     const float3 viewDirection = normalize(-ViewToWorldPosition(positionVS, Camera.ViewInverse));
+ 
+     const float3 albedo = LLGammaToTrueLinear(AlbedoTexture.SampleLevel(PointClampSampler, sourceUV, 0).rgb);
+@@ -84,5 +96,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+     const float2 envBRDF = BRDF::EnvBRDF(roughness, NdotV);
+ 
+     OutSpecularAlbedo[pixelPos] = float3(F0 * envBRDF.x + envBRDF.y);
++    OutDiffuseAlbedo[pixelPos] = albedo * (1.0f - metalness);
++    OutNormalRoughness[pixelPos] = float4(normal, roughness);
+ #endif
+ }
+diff --git a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
+index 5d1659b..5d38cc5 100644
+--- a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
++++ b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
+@@ -78,6 +78,20 @@ void Main()
+ 
+ #endif    
+     
++#if defined(DLSS_RR) && !SHARC_UPDATE
++    RRHitDistance[idx] = 0;
++    float rrDistanceSum = 0;
++    uint rrDistanceCount = 0;
++    bool rrSpecularSample = false;
++#endif
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++    uint surfaceIndex = (Camera.FrameIndex % 2) * (Camera.RenderSize.x * Camera.RenderSize.y)
++        + idx.y * Camera.RenderSize.x + idx.x;
++    GISurfaces[surfaceIndex] = PSD_Empty();
++    GISecondaryPositionNormal[idx] = 0;
++    GISecondaryRadiance[idx] = 0;
++    GIOriginalContribution[idx] = 0;
++#endif
+     const float2 uv = float2(idx + 0.5f) / size;
+ 
+     // If the game has dynamic resolution enabled the textures will not cover the entire extent
+@@ -86,7 +100,12 @@ void Main()
+     
+     const float2 dynamicUVUnjittered = dynamicUV - (Camera.Jitter / Camera.ScreenSize);
+ 
+-    const float depth = Depth.SampleLevel(DefaultSampler, dynamicUVUnjittered, 0);
++    // Depth is a surface identity, not a filterable color. Clamp jitter at the border.
++    uint depthWidth, depthHeight;
++    Depth.GetDimensions(depthWidth, depthHeight);
++    int2 depthPixel = clamp(int2(floor(dynamicUVUnjittered * float2(depthWidth, depthHeight))),
++        int2(0, 0), int2(depthWidth, depthHeight) - 1);
++    const float depth = Depth.Load(int3(depthPixel, 0));
+     
+     const float depthVS = ScreenToViewDepth(depth, Camera.CameraData);
+ 
+@@ -150,7 +169,20 @@ void Main()
+     Surface sourceSurface = SurfaceMaker::make(positionWS, faceNormal, normalWS, tangentWS, bitangentWS, albedo, roughness, metalness, 0, ao);
+     BRDFContext sourceBRDFContext = BRDFContext::make(sourceSurface, -positionCS / hitDistance);
+ 
+-    AdjustShadingNormal(sourceSurface, sourceBRDFContext, false, false);    
++    AdjustShadingNormal(sourceSurface, sourceBRDFContext, false, false);
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++    // First experimental path: ordinary opaque, rough raster materials only.
++    // Always describe valid source surfaces, even when this pixel's ray misses.
++    bool hybridEligible = sourceSurface.Roughness >= 0.2f && sourceSurface.Metallic < 0.95f;
++    if (hybridEligible)
++        GISurfaces[surfaceIndex] = PSD_Pack(sourceSurface.Position, sourceSurface.Normal,
++            sourceSurface.Tangent, sourceSurface.Bitangent, sourceSurface.FaceNormal,
++            sourceBRDFContext.ViewDirection, sourceSurface.DiffuseAlbedo, sourceSurface.F0,
++            sourceSurface.Roughness, sourceSurface.Metallic, Feature::kDefault, false, depthVS);
++    float3 candidateWeight = 0;
++    float candidatePdf = 0;
++    bool candidateHit = false;
++#endif    
+ 
+     StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, sourceSurface.Normal, sourceBRDFContext.ViewDirection, true);     
+ 
+@@ -192,6 +224,10 @@ void Main()
+     SharcHitData sharcHitData;
+ #endif    
+     
++#if defined(RAW_RADIANCE) && !defined(NRD)
++    float diffHitDist = 0.0f;
++    float specHitDist = 0.0f;
++#endif
+ #if defined(NRD)
+      float diffHitDist = 0.0f;
+      uint diffPathNum = 0;
+@@ -210,7 +246,7 @@ void Main()
+         bsdf = sourceBSDF;
+         rayCone = sourceRayCone; 
+ 
+-#if defined(NRD)
++#if defined(NRD) || defined(RAW_RADIANCE)
+         float accumulatedHitDist = 0;
+ #endif
+ 
+@@ -243,7 +279,29 @@ void Main()
+             if (bsdf.SampleBSDF(brdfContext, material.Feature, surface, bsdfSample, randomSeed))
+                 direction = bsdfSample.wo;
+             else
+-                break;            
++                break;
++
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++            if (i == 0 && j == 0 && hybridEligible)
++            {
++                // Known full-hemisphere PDF, with full non-delta BSDF evaluation.
++                // Avoid mixing lobe-conditional PDFs and full-BSDF target weights.
++                direction = sourceSurface.Mul(SampleCosineHemisphere(randomSeed));
++                bsdfSample.wo = direction;
++                bsdfSample.pdf = max(dot(sourceSurface.Normal, direction), 0.0f) / K_PI;
++                bsdfSample.weight = sourceBSDF.Eval(sourceBRDFContext, Feature::kDefault,
++                    sourceSurface, direction).rgb / max(bsdfSample.pdf, 1e-8f);
++                bsdfSample.lobe = (uint)LobeType::DiffuseReflection;
++                candidatePdf = bsdfSample.pdf;
++            }
++#endif
++#if defined(DLSS_RR) && !SHARC_UPDATE
++            if (j == 0)
++                rrSpecularSample = bsdfSample.isLobe(LobeType::Specular) || bsdfSample.isLobe(LobeType::Delta);
++#if defined(HYBRID_RESTIR)
++            if (i == 0 && j == 0 && hybridEligible) rrSpecularSample = true;
++#endif
++#endif            
+  
+ #if defined(RAW_RADIANCE)
+             if (j == 0)
+@@ -286,6 +344,10 @@ void Main()
+             throughput *= bsdfSample.weight;
+ #endif   // !RAW_RADIANCE
+             
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++            if (i == 0 && j == 0 && hybridEligible)
++                candidateWeight = throughput;
++#endif
+ #if defined(SHARC) && SHARC_UPDATE
+             SharcSetThroughput(sharcState, throughput);
+ #else
+@@ -298,6 +360,9 @@ void Main()
+ #       endif            
+ #   endif
+             
++#if defined(HYBRID_RESTIR)
++        if (!(i == 0 && j == 0 && hybridEligible)) {
++#endif
+ #   if RUSSIAN_ROULETTE == 1
+         const float rrVal = 1.0f - min(1.0f, Color::RGBToLuminance(throughputColor));              
+         const float rrProb = min(rrVal, 0.95f);
+@@ -323,8 +388,11 @@ void Main()
+                 originalThroughput /= (1.0f - rrProb);
+ #       endif                
+ #   endif
++#if defined(HYBRID_RESTIR)
++        }
+ #endif
+-            
++#endif
++
+ #if defined(SHARC) && (SHARC_ENABLE_SH_ENCODING || !SHARC_UPDATE)
+             materialRoughnessPrev += bsdfSample.isLobe(LobeType::Diffuse) ? 1.0f : surface.Roughness;
+ #endif
+@@ -348,6 +416,12 @@ void Main()
+                 rayCone = RayCone::make(rayCone.getWidth(), min(rayCone.getSpreadAngle() + ComputeRayConeSpreadAngleExpansionByScatterPDF(bsdfSample.pdf), 2.0 * K_PI));
+ 
+             payload = TraceRayStandard(Scene, ray, randomSeed);
++#if defined(DLSS_RR) && !SHARC_UPDATE
++            if (j == 0 && rrSpecularSample) {
++                rrDistanceSum += payload.Hit() ? payload.hitDistance : 0.0f;
++                rrDistanceCount++;
++            }
++#endif
+             
+             rayCone = rayCone.propagateDistance(payload.hitDistance);
+ 
+@@ -374,7 +448,7 @@ void Main()
+                 break;
+             }
+             
+-#if defined(NRD)
++#if defined(NRD) || defined(RAW_RADIANCE)
+             if (j == 0)
+                 accumulatedHitDist = payload.hitDistance;
+ #endif                      
+@@ -382,6 +456,15 @@ void Main()
+             float3 localPosition = ray.Origin + direction * payload.hitDistance;
+ 
+             surface = SurfaceMaker::make(localPosition, payload, direction, rayCone, instance, material, false);
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++            if (i == 0 && j == 0 && hybridEligible && candidatePdf > 0 && all(candidateWeight > 1e-8f)) {
++                float3 n = dot(surface.FaceNormal, -direction) >= 0 ? surface.Normal : -surface.Normal;
++                half2 enc = EncodeNormal((half3)n);
++                uint packed = f32tof16(enc.x) | (f32tof16(enc.y) << 16);
++                GISecondaryPositionNormal[idx] = float4(surface.Position, asfloat(packed));
++                candidateHit = true;
++            }
++#endif
+ 
+ #if defined(SHARC)
+             sharcHitData.positionWorld = surface.Position;
+@@ -481,6 +564,15 @@ void Main()
+         
+         }
+ 
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++        if (i == 0 && candidateHit && all(isfinite(sampleRadiance))) {
++            // Reservoir radiance is incident radiance, not BRDF-modulated color.
++            // Keep the original estimator in Main; final shading replaces ONLY
++            // this 1/SPP term after a valid reservoir and visibility test exist.
++            GISecondaryRadiance[idx] = float4(sampleRadiance / candidateWeight / MAX_SAMPLES, candidatePdf);
++            GIOriginalContribution[idx] = float4(sampleRadiance / MAX_SAMPLES, sourceSurface.AO);
++        }
++#endif
+ #if defined(NRD)
+ #   if defined(NRD_REBLUR)
+         float normHitDist = REBLUR_FrontEnd_GetNormHitDist(accumulatedHitDist, depthVS, Raytracing.HitDistSettings.xyz, sourceSurface.Roughness);
+@@ -496,6 +588,11 @@ void Main()
+         }
+ #endif
+         
++#if defined(RAW_RADIANCE) && !defined(NRD)
++        // Raw first-hit distances in game units; this is not NRD normalized distance.
++        if (isSpecularSample) specHitDist += accumulatedHitDist / MAX_SAMPLES;
++        else diffHitDist += accumulatedHitDist / MAX_SAMPLES;
++#endif
+ #if defined(RAW_RADIANCE)
+         if (isSpecularSample)
+             specularRadiance += sampleRadiance;
+@@ -521,6 +618,9 @@ void Main()
+ #else
+     radiance /= MAX_SAMPLES;
+ #endif
++#if defined(DLSS_RR) && !SHARC_UPDATE
++    RRHitDistance[idx] = rrDistanceCount > 0 ? rrDistanceSum / rrDistanceCount : 0.0f;
++#endif
+        
+ #if !(defined(SHARC) && SHARC_UPDATE)
+ #   if defined(RAW_RADIANCE)
+diff --git a/shaders/raytracing/GlobalIllumination/Registers.hlsli b/shaders/raytracing/GlobalIllumination/Registers.hlsli
+index 73a1139..e6682c2 100644
+--- a/shaders/raytracing/GlobalIllumination/Registers.hlsli
++++ b/shaders/raytracing/GlobalIllumination/Registers.hlsli
+@@ -78,4 +78,16 @@ SamplerState                                DefaultSampler              : regist
+ SamplerState                                ClampSampler                : register(s1);
+ SamplerState                                PointWrapSampler            : register(s2);
+ 
++#if defined(DLSS_RR) && !SHARC_UPDATE
++RWTexture2D<float> RRHitDistance : register(u2);
++#endif
++
++#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
++#include "interop/PackedSurfaceData.hlsli"
++RWTexture2D<float4> GISecondaryPositionNormal : register(u3);
++RWTexture2D<float4> GISecondaryRadiance : register(u4);
++// RGB = original candidate contribution, A = primary AO.
++RWTexture2D<float4> GIOriginalContribution : register(u5);
++RWStructuredBuffer<PackedSurfaceData> GISurfaces : register(u6);
++#endif
+ #endif // REGISTERS_HLSLI
+\ No newline at end of file
+diff --git a/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl b/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
+index 1c32a00..1548d08 100644
+--- a/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
++++ b/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
+@@ -44,6 +44,27 @@ void Main(uint2 GlobalIndex : SV_DispatchThreadID)
+     if (!RTXDI_IsValidGIReservoir(finalReservoir))
+         return;
+ 
++#if defined(HYBRID_RESTIR)
++    // Replace a single existing estimator term. A miss/unsupported material or
++    // failed/invalid reservoir leaves the complete original GI image untouched.
++    float4 initial = SecondaryRadiance[GlobalIndex];
++    float4 original = SecondaryDiffuseAlbedo[GlobalIndex];
++    if (initial.w <= 0) return;
++    float3 L = finalReservoir.position - rab.surface.Position;
++    float distanceToSample = length(L);
++    if (distanceToSample <= 1e-4f) return;
++    L /= distanceToSample;
++    if (!RAB_GetConservativeVisibility(rab, finalReservoir.position)) return;
++    float3 replacement = rab.Eval(L).rgb * finalReservoir.radiance * finalReservoir.weightSum * original.a;
++    if (!all(isfinite(replacement))) return;
++    float4 current = OutputRadiance[GlobalIndex];
++    float3 color = max(0.0f, current.rgb - original.rgb + replacement);
++    OutputRadiance[GlobalIndex] = float4(color, current.a);
++#if defined(DLSS_RR) && MAX_SAMPLES == 1
++    HybridRRHitDistance[GlobalIndex] = distanceToSample;
++#endif
++    return;
++#else
+     // Reconstruct initial reservoir from secondary surface data
+     RTXDI_GIReservoir initialReservoir = RTXDI_EmptyGIReservoir();
+     {
+@@ -114,4 +135,5 @@ void Main(uint2 GlobalIndex : SV_DispatchThreadID)
+     float3 linearColor = LLGammaToTrueLinear(currentColor.rgb);
+     linearColor += finalGI;
+     OutputRadiance[GlobalIndex] = float4(LLTrueLinearToGamma(linearColor), currentColor.a);
++#endif
+ }
+diff --git a/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli b/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli
+index 34f4544..81a0639 100644
+--- a/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli
++++ b/shaders/raytracing/RTXDI/ReSTIRGI/Registers.hlsli
+@@ -47,6 +47,10 @@ RWStructuredBuffer<RTXDI_PackedGIReservoir> GIReservoirs : register(u0);
+ // Output: MainTexture (final shading reads, adds GI, writes back)
+ RWTexture2D<float4> OutputRadiance        : register(u1);
+ 
++#if defined(HYBRID_RESTIR) && defined(DLSS_RR)
++RWTexture2D<float> HybridRRHitDistance : register(u2);
++#endif
++
+ SamplerState DefaultSampler               : register(s0);
+ 
+ // Define macros required by RTXDI before including its headers
+diff --git a/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli b/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli
+index 3ada60a..25fc60e 100644
+--- a/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli
++++ b/shaders/raytracing/RTXDI/RtxdiApplicationBridge.hlsli
+@@ -199,6 +199,8 @@ float3 RAB_GetSurfaceWorldPos(RAB_Surface rab)
+ // ---------------------------------------------------------------------------
+ RAB_Surface RAB_GetGBufferSurface(uint2 pixelPosition, bool previousFrame)
+ {
++    if (previousFrame && g_ReSTIRGI.resetHistory != 0)
++        return RAB_EmptySurface();
+     if (any(pixelPosition >= Camera.RenderSize))
+         return RAB_EmptySurface();
+ 
+diff --git a/shaders/raytracing/ShadowLab/ShadowLab.hlsl b/shaders/raytracing/ShadowLab/ShadowLab.hlsl
+new file mode 100644
+index 0000000..bce31d1
+--- /dev/null
++++ b/shaders/raytracing/ShadowLab/ShadowLab.hlsl
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "interop/CameraData.hlsli"
++#include "interop/RaytracingData.hlsli"
++ConstantBuffer<CameraData> Camera : register(b0);
++ConstantBuffer<RaytracingData> Data : register(b1);
++RaytracingAccelerationStructure Scene : register(t0);
++RWTexture2D<float4> Output : register(u0);
++struct Payload { float distance; };
++
++float TraceDistance(RayDesc ray) {
++#if RTLAB_INLINE
++    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
++    query.TraceRayInline(Scene, RAY_FLAG_NONE, 0xff, ray);
++    while (query.Proceed()) {}
++    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? query.CommittedRayT() : -1.0;
++#else
++    Payload p; p.distance = -1.0;
++    TraceRay(Scene, RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
++        0xff, 0, 0, 0, ray, p);
++    return p.distance;
++#endif
++}
++void Render(uint2 pixel) {
++    if (any(pixel >= Camera.RenderSize)) return;
++    float2 uv = (float2(pixel) + 0.5) / float2(Camera.RenderSize);
++    float4 view = mul(Camera.ProjInverse, float4(uv.x * 2 - 1, 1 - uv.y * 2, 1, 1));
++    RayDesc ray;
++    ray.Origin = Camera.Position;
++    ray.Direction = normalize(mul((float3x3)Camera.ViewInverse, view.xyz / view.w));
++    ray.TMin = 0.1; ray.TMax = 100000.0;
++    float distance = TraceDistance(ray);
++    if (distance < 0) { Output[pixel] = 0; return; }
++    float3 sun = Data.DirectionalLight.Direction;
++    if (dot(sun, sun) < 0.001) { Output[pixel] = float4(1, 0, 1, 1); return; }
++    sun = normalize(sun);
++    // Diagnostic bias in Skyrim units, not a material-aware normal offset.
++    ray.Origin += ray.Direction * (distance - 0.25) + sun * 0.25;
++    ray.Direction = sun;
++    float value = TraceDistance(ray) < 0 ? 0.8 : 0.025;
++    Output[pixel] = float4(value.xxx, 1);
++}
++#if RTLAB_INLINE
++[numthreads(8, 8, 1)]
++void Main(uint2 pixel : SV_DispatchThreadID) { Render(pixel); }
++#else
++[shader("raygeneration")]
++void Main() { Render(DispatchRaysIndex().xy); }
++[shader("miss")]
++void Miss(inout Payload p) { p.distance = -1; }
++[shader("closesthit")]
++void ClosestHit(inout Payload p, BuiltInTriangleIntersectionAttributes attributes) { p.distance = RayTCurrent(); }
++#endif
+diff --git a/src/API.cpp b/src/API.cpp
+index a568571..1af0979 100644
+--- a/src/API.cpp
++++ b/src/API.cpp
+@@ -1,11 +1,20 @@
+ #include "API.h"
++uint32_t GetShadowLabABI() { return 0x20261031u; }
+ #include "Scene.h"
+ #include "Renderer.h"
+ #include "Pass/Raytracing/Common/Accumulation.h"
+ 
+ bool InitializeRenderer(RendererSettings* rendererSettings, ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device, ID3D12CommandQueue* commandQueue, ID3D12CommandQueue* computeCommandQueue, ID3D12CommandQueue* copyCommandQueue)
+ {
+-	return Renderer::GetSingleton()->Initialize(rendererSettings, d3d11Device, d3d12Device, commandQueue, computeCommandQueue, copyCommandQueue);
++
++    D3D12_FEATURE_DATA_D3D12_OPTIONS5 options{};
++    if (!rendererSettings || !d3d12Device || FAILED(d3d12Device->CheckFeatureSupport(
++        D3D12_FEATURE_D3D12_OPTIONS5, &options, sizeof(options))) ||
++        options.RaytracingTier < (rendererSettings->UseRayQuery ? D3D12_RAYTRACING_TIER_1_1 : D3D12_RAYTRACING_TIER_1_0)) {
++        logger::error("ShadowLab: required DXR tier unavailable");
++        return false;
++    }
++    return Renderer::GetSingleton()->Initialize(rendererSettings, d3d11Device, d3d12Device, commandQueue, computeCommandQueue, copyCommandQueue);
+ }
+ 
+ bool InitializeVulkanRenderer(RendererSettings* rendererSettings, void* instance, void* physicalDevice, void* device, void* graphicsQueue, int graphicsQueueIndex, void* transferQueue, int transferQueueIndex, void* computeQueue, int computeQueueIndex)
+@@ -51,7 +60,13 @@ void GetResolution(uint32_t& width, uint32_t& height)
+ 
+ uint32_t PostExecution()
+ {
+-	return Renderer::GetSingleton()->PostExecution();
++	auto* renderer = Renderer::GetSingleton();
++	// Poll completion for CPU readbacks/timings, but select the submitted image.
++	// The native host wraps Execute/PostExecution in DX12Interop::Fence:
++	// its DX11 GPU wait follows this submission on the same DX12 queue.
++	// CPU query readiness must not choose an older image with current guides.
++	renderer->PostExecution();
++	return renderer->GetCurrentSlot();
+ }
+ 
+ void UpdateFeatureData(void* data, uint32_t size)
+@@ -106,6 +121,21 @@ void GetRRInput(ID3D12Resource*& specularAlbedo, ID3D12Resource*& specularHitDis
+ 	specularHitDistance = textureManager.GetTexture(RenderTarget::RRSpecularHitDist)->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
+ }
+ 
++bool GetHybridRRInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& normalRoughness)
++{
++	diffuseAlbedo = nullptr;
++	normalRoughness = nullptr;
++	const auto& settings = Scene::GetSingleton()->m_Settings;
++	if (!settings.Enabled || settings.GeneralSettings.Mode != Mode::GlobalIllumination ||
++		settings.GeneralSettings.Denoiser != Denoiser::DLSS_RR)
++		return false;
++
++	auto& targets = Renderer::GetSingleton()->RenderTargetManager();
++	diffuseAlbedo = targets.GetTexture(RenderTarget::RRDiffuseAlbedo)->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
++	normalRoughness = targets.GetTexture(RenderTarget::RRNormalRoughness)->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource);
++	return diffuseAlbedo && normalRoughness;
++}
++
+ void SetSharedTextures(ID3D12Resource* albedo, ID3D12Resource* normalRoughness, ID3D12Resource* gnmao)
+ {
+ 	auto* renderer = Renderer::GetSingleton();
+@@ -151,4 +181,4 @@ uint64_t GetFakeDoubledVRAMUsage()
+ 		return 0;
+ 
+ 	return textureManager->GetFakeDoubledVRAMUsage();
+-}
+\ No newline at end of file
++}
+diff --git a/src/API.h b/src/API.h
+index 621a60a..e6771c7 100644
+--- a/src/API.h
++++ b/src/API.h
+@@ -6,6 +6,7 @@
+ #include "Types/Settings.h"
+ 
+ extern "C" {
++	CERT_API uint32_t GetShadowLabABI();
+ 	CERT_API bool InitializeRenderer(RendererSettings* rendererSettings, ID3D11Device5* d3d11Device, ID3D12Device5* d3d12Device, ID3D12CommandQueue* commandQueue, ID3D12CommandQueue* computeCommandQueue, ID3D12CommandQueue* copyCommandQueue);
+ 	CERT_API bool InitializeVulkanRenderer(RendererSettings* rendererSettings, void* instance, void* physicalDevice, void* device, void* graphicsQueue, int graphicsQueueIndex, void* transferQueue, int transferQueueIndex, void* computeQueue, int computeQueueIndex);
+ 	CERT_API void Initialize(Settings);
+@@ -22,9 +23,10 @@ extern "C" {
+ 	CERT_API void GetSceneGraphCounters(uint32_t& textures, uint32_t& models, uint32_t& instances);
+ 	CERT_API void UpdateSettings(Settings);
+ 	CERT_API void GetRRInput(ID3D12Resource*& specularAlbedo, ID3D12Resource*& specularHitDistance);
++	CERT_API bool GetHybridRRInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& normalRoughness);
+ 	CERT_API void SetSharedTextures(ID3D12Resource* albedo, ID3D12Resource* normalRoughness, ID3D12Resource* gnmao);
+ 	CERT_API void GetSharedTextures(SharedTexture* depth, SharedTexture* motionVector, SharedTexture* main, SharedTexture* diffuseAlbedo);
+ 	CERT_API void UpdateJitter(float2 jitter);
+ 	CERT_API uint32_t GetAccumulatedFrameCount();
+ 	CERT_API uint64_t GetFakeDoubledVRAMUsage();
+-}
+\ No newline at end of file
++}
+diff --git a/src/Pass/NRD/NRDIntegration.cpp b/src/Pass/NRD/NRDIntegration.cpp
+index 48392df..ad6e6b6 100644
+--- a/src/Pass/NRD/NRDIntegration.cpp
++++ b/src/Pass/NRD/NRDIntegration.cpp
+@@ -100,6 +100,8 @@ namespace Pass::NRD
+ 
+ 	void NRDIntegration::Initialize()
+ 	{
++        Setup();
++        if (!m_NRD) return;
+ 		CreateBindingLayouts();
+ 		CreatePipelines();
+ 		CreateResources();
+@@ -252,6 +254,7 @@ namespace Pass::NRD
+ 
+ 	void NRDIntegration::CreateResources()
+ 	{
++        m_ResetHistory = true;
+ 		if (!m_NRD)
+ 			return;
+ 
+@@ -368,12 +371,14 @@ namespace Pass::NRD
+ 
+ 	void NRDIntegration::SettingsChanged(const Settings& settings)
+ 	{
++        const bool wasEnabled = m_Enabled;
+ 		if (IsRelax())
+ 			m_Enabled = (settings.GeneralSettings.Denoiser == Denoiser::NRD_Relax);
+ 		else
+ 			m_Enabled = (settings.GeneralSettings.Denoiser == Denoiser::NRD_Reblur);
+ 
+ 		UpdateSettings(settings);
++        if (wasEnabled != m_Enabled) m_ResetHistory = true;
+ 	}
+ 
+ 	void NRDIntegration::UpdateSettings(const Settings& settings)
+@@ -614,7 +619,20 @@ namespace Pass::NRD
+ 			m_SettingsDirty = false;
+ 		}
+ 
+-		UpdateCommonSettings();
++        UpdateCommonSettings();
++        const bool resetHistory = m_ResetHistory ||
++            m_CommonSettings.frameIndex != static_cast<uint32_t>(m_LastHistoryFrame + 1u);
++        m_CommonSettings.accumulationMode = resetHistory ?
++            nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
++        if (resetHistory) {
++            // Previous matrices/sizes are not meaningful for new history textures.
++            std::memcpy(m_CommonSettings.worldToViewMatrixPrev, m_CommonSettings.worldToViewMatrix, sizeof(float4x4));
++            std::memcpy(m_CommonSettings.viewToClipMatrixPrev, m_CommonSettings.viewToClipMatrix, sizeof(float4x4));
++            std::memcpy(m_CommonSettings.resourceSizePrev, m_CommonSettings.resourceSize, sizeof(m_CommonSettings.resourceSize));
++            std::memcpy(m_CommonSettings.rectSizePrev, m_CommonSettings.rectSize, sizeof(m_CommonSettings.rectSize));
++            std::memcpy(m_CommonSettings.cameraJitterPrev, m_CommonSettings.cameraJitter, sizeof(m_CommonSettings.cameraJitter));
++            logger::info("RTLab NRD history reset: frame={}, resources={}", m_CommonSettings.frameIndex, m_ResetHistory);
++        }
+ 
+ 		const nrd::Result commonSettingsResult = nrd::SetCommonSettings(*m_NRD, m_CommonSettings);
+ 		if (commonSettingsResult != nrd::Result::SUCCESS) {
+@@ -750,5 +768,8 @@ namespace Pass::NRD
+ 
+ 			commandList->endMarker();
+ 		}
++        // Only advance history after all dispatches have been recorded successfully.
++        m_ResetHistory = false;
++        m_LastHistoryFrame = m_CommonSettings.frameIndex;
+ 	}
+ }
+diff --git a/src/Pass/NRD/NRDIntegration.h b/src/Pass/NRD/NRDIntegration.h
+index 4ffd080..974eff2 100644
+--- a/src/Pass/NRD/NRDIntegration.h
++++ b/src/Pass/NRD/NRDIntegration.h
+@@ -55,6 +55,8 @@ namespace Pass::NRD
+ 		eastl::vector<DispatchBindingCache> m_DispatchBindingCaches;
+ 
+ 		bool m_ResourcesDirty = true;
++        bool m_ResetHistory = true;
++        uint32_t m_LastHistoryFrame = 0;
+ 		bool m_SettingsDirty = true;
+ 
+ 		void Setup();
+diff --git a/src/Pass/Raytracing/Common/SceneTLAS.cpp b/src/Pass/Raytracing/Common/SceneTLAS.cpp
+index 1883ded..771bfec 100644
+--- a/src/Pass/Raytracing/Common/SceneTLAS.cpp
++++ b/src/Pass/Raytracing/Common/SceneTLAS.cpp
+@@ -75,11 +75,17 @@ namespace Pass
+ 		// Directional Light
+ 		{
+ #if defined(SKYRIM)
+-			auto dirLight = ce_cast<RE::NiDirectionalLight*>(Util::Adapter::GetShaderManagerState().shadowSceneNode[0]->GetRuntimeData().sunLight->light.get());
+-			auto& lightRuntimeData = dirLight->GetLightRuntimeData();
+-			m_RaytracingData->DirectionalLight.Direction = -Util::Math::Normalize(Util::Math::Float3(dirLight->GetWorldDirection()));
+-			m_RaytracingData->DirectionalLight.Color = Util::Math::Float3(lightRuntimeData.diffuse);
+-			m_RaytracingData->DirectionalLight.Fade = lightRuntimeData.fade;
++            m_RaytracingData->DirectionalLight = {};
++            auto* node = Util::Adapter::GetShaderManagerState().shadowSceneNode[0];
++            if (node && node->GetRuntimeData().sunLight && node->GetRuntimeData().sunLight->light) {
++                auto* light = ce_cast<RE::NiDirectionalLight*>(node->GetRuntimeData().sunLight->light.get());
++                if (light) {
++                    auto& data = light->GetLightRuntimeData();
++                    m_RaytracingData->DirectionalLight.Direction = -Util::Math::Normalize(Util::Math::Float3(light->GetWorldDirection()));
++                    m_RaytracingData->DirectionalLight.Color = Util::Math::Float3(data.diffuse);
++                    m_RaytracingData->DirectionalLight.Fade = data.fade;
++                }
++            }
+ #elif defined(FALLOUT4)
+ 			auto ssn = Util::Adapter::GetShadowSceneNode(0);
+ 			if (ssn && ssn->sunLight && ssn->sunLight->light) {
+diff --git a/src/Pass/Raytracing/GlobalIllumination.cpp b/src/Pass/Raytracing/GlobalIllumination.cpp
+index fa1390f..e3f3f25 100644
+--- a/src/Pass/Raytracing/GlobalIllumination.cpp
++++ b/src/Pass/Raytracing/GlobalIllumination.cpp
+@@ -83,6 +83,14 @@ namespace Pass::Raytracing
+ 		};
+ 
+ 		const auto& settings = Scene::GetSingleton()->m_Settings;
++        if (settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)
++            globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(2));
++        if (settings.ReSTIRGI.Enabled && settings.ReSTIRGI.ResamplingMode != ReSTIRGIResamplingMode::None &&
++            (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)) {
++            for (uint slot = 3; slot <= 5; ++slot)
++                globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(slot));
++            globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6));
++        }
+ 
+ 		if (settings.SHaRCSettings.Enabled) {
+ 			globalBindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3));
+@@ -279,6 +287,16 @@ namespace Pass::Raytracing
+ 			nvrhi::BindingSetItem::Texture_UAV(0, diffuseTexture)
+ 		};
+ 
++        if (settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(2, textureManager.GetTexture(RenderTarget::RRSpecularHitDist)));
++        if (settings.ReSTIRGI.Enabled && settings.ReSTIRGI.ResamplingMode != ReSTIRGIResamplingMode::None &&
++            (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)) {
++            auto* gi = renderer->GetReSTIRGIResources();
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(3, gi->secondaryGBufferPositionNormal));
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(4, gi->secondaryGBufferRadiance));
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(5, gi->secondaryGBufferDiffuseAlbedo));
++            bindingSetDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_UAV(6, gi->surfaceDataBuffer));
++        }
+ 		if (settings.SHaRCSettings.Enabled) {
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::ConstantBuffer(3, m_SHaRC->GetSHaRCConstantBuffer()));
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(11, m_SHaRC->GetResolveBuffer()));
+diff --git a/src/Pass/Raytracing/ReSTIRGIPass.cpp b/src/Pass/Raytracing/ReSTIRGIPass.cpp
+index eb9a363..8270c3b 100644
+--- a/src/Pass/Raytracing/ReSTIRGIPass.cpp
++++ b/src/Pass/Raytracing/ReSTIRGIPass.cpp
+@@ -64,7 +64,8 @@ namespace Pass::Raytracing
+ 			nvrhi::BindingLayoutItem::Texture_SRV(12),              // t12: PrimarySpecularAlbedo
+ 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),     // t13: SurfaceDataBuffer (packed primary surface ping-pong)
+ 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),      // u0: GIReservoirs
+-			nvrhi::BindingLayoutItem::Texture_UAV(1),               // u1: OutputRadiance
++			nvrhi::BindingLayoutItem::Texture_UAV(1),
++            nvrhi::BindingLayoutItem::Texture_UAV(2),               // u1: OutputRadiance
+ 			nvrhi::BindingLayoutItem::Sampler(0),                   // s0
+ 		};
+ 		m_BindingLayout = GetRenderer()->GetDevice()->createBindingLayout(desc);
+@@ -121,11 +122,17 @@ namespace Pass::Raytracing
+ 
+ 		m_Context = eastl::make_unique<rtxdi::ReSTIRGIContext>(staticParams);
+ 		m_BindingSetDirty.fill(true);
++        m_ResetHistory = true;
+ 	}
+ 
+ 	void ReSTIRGIPass::SettingsChanged(const Settings& settings)
+ 	{
++        m_Hybrid = settings.GeneralSettings.Mode == Mode::GlobalIllumination;
+ 		auto defines = Util::Shader::GetRaytracingDefines(settings, false, false);
++        if (m_Hybrid) defines.emplace_back(L"HYBRID_RESTIR", L"1");
++        if (m_Hybrid && settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR)
++            defines.emplace_back(L"DLSS_RR", L"1");
++        m_ResetHistory = true;
+ 
+ 		if (defines != m_Defines) {
+ 			m_Defines = defines;
+@@ -133,7 +140,9 @@ namespace Pass::Raytracing
+ 			m_BindingSetDirty.fill(true);
+ 		}
+ 
+-		m_Enabled = settings.ReSTIRGI.Enabled;
++		m_Enabled = settings.ReSTIRGI.Enabled && (m_Hybrid ?
++            (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR) :
++            settings.AdvancedSettings.StablePlanes);
+ 
+ 		if (!m_Enabled)
+ 			return;
+@@ -216,7 +225,7 @@ namespace Pass::Raytracing
+ 			nvrhi::BindingSetItem::ConstantBuffer(1, m_ConstantBuffer),
+ 			nvrhi::BindingSetItem::ConstantBuffer(2, scene->GetFeatureBuffer()),
+ 			nvrhi::BindingSetItem::RayTracingAccelStruct(0, m_SceneTLAS->GetTopLevelAS().GetHandle()),
+-			nvrhi::BindingSetItem::Texture_SRV(1, textureManager.GetTexture(RenderTarget::ClipDepth)),
++			nvrhi::BindingSetItem::Texture_SRV(1, (m_Hybrid ? renderer->GetDepthTexture() : textureManager.GetTexture(RenderTarget::ClipDepth))),
+ 			nvrhi::BindingSetItem::Texture_SRV(2, renderTargets->normalRoughness),
+ 			nvrhi::BindingSetItem::Texture_SRV(3, giRes->prevGBufferDepth),
+ 			nvrhi::BindingSetItem::Texture_SRV(4, giRes->prevGBufferNormals),
+@@ -225,12 +234,13 @@ namespace Pass::Raytracing
+ 			nvrhi::BindingSetItem::Texture_SRV(7, giRes->secondaryGBufferDiffuseAlbedo),
+ 			nvrhi::BindingSetItem::Texture_SRV(8, giRes->secondaryGBufferSpecularF0Roughness),
+ 			nvrhi::BindingSetItem::TypedBuffer_SRV(9, giRes->neighborOffsetBuffer),
+-			nvrhi::BindingSetItem::Texture_SRV(10, textureManager.GetTexture(RenderTarget::MotionVectors3D)),
++			nvrhi::BindingSetItem::Texture_SRV(10, (m_Hybrid ? renderer->GetMotionVectorTexture() : textureManager.GetTexture(RenderTarget::MotionVectors3D))),
+ 			nvrhi::BindingSetItem::Texture_SRV(11, textureManager.GetTexture(RenderTarget::DiffuseAlbedo)),
+ 			nvrhi::BindingSetItem::Texture_SRV(12, textureManager.GetTexture(RenderTarget::RRSpecularAlbedo)),
+ 			nvrhi::BindingSetItem::StructuredBuffer_SRV(13, giRes->surfaceDataBuffer),
+ 			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, giRes->reservoirBuffer),
+ 			nvrhi::BindingSetItem::Texture_UAV(1, renderer->GetMainTexture()),
++            nvrhi::BindingSetItem::Texture_UAV(2, textureManager.GetTexture(RenderTarget::RRSpecularHitDist)),
+ 			nvrhi::BindingSetItem::Sampler(0, m_LinearWrapSampler),
+ 		};
+ 
+@@ -242,7 +252,8 @@ namespace Pass::Raytracing
+ 	{
+ 		m_Context->SetFrameIndex(m_Context->GetFrameIndex() + 1);
+ 
+-		ReSTIRGIData cbData;
++		ReSTIRGIData cbData{};
++        cbData.resetHistory = m_ResetHistory ? 1u : 0u;
+ 		cbData.giParams.reservoirBufferParams = m_Context->GetReservoirBufferParameters();
+ 		cbData.giParams.bufferIndices = m_Context->GetBufferIndices();
+ 		cbData.giParams.temporalResamplingParams = m_Context->GetTemporalResamplingParameters();
+@@ -257,6 +268,14 @@ namespace Pass::Raytracing
+ 		cbData.runtimeParams.frameIndex = m_Context->GetFrameIndex();
+ 		cbData.runtimeParams.pad2 = 0;
+ 
++        // Spatial-only mode must never silently reuse temporal history.
++        if (m_ResamplingMode == rtxdi::ReSTIRGI_ResamplingMode::Spatial) {
++            cbData.resetHistory = 1;
++        }
++        if (m_Hybrid) {
++            cbData.giParams.finalShadingParams.enableFinalMIS = 0;
++            cbData.giParams.finalShadingParams.enableFinalVisibility = 1;
++        }
+ 		// Set uniform random number for permutation sampling
+ 		auto& tparams = cbData.giParams.temporalResamplingParams;
+ 		tparams.uniformRandomNumber = m_Context->GetFrameIndex();
+@@ -273,7 +292,7 @@ namespace Pass::Raytracing
+ 		auto& textureManager = renderer->RenderTargetManager();
+ 
+ 		// Copy current depth to previous
+-		commandList->copyTexture(giRes->prevGBufferDepth, nvrhi::TextureSlice(), textureManager.GetTexture(RenderTarget::ClipDepth), nvrhi::TextureSlice());
++		commandList->copyTexture(giRes->prevGBufferDepth, nvrhi::TextureSlice(), (m_Hybrid ? renderer->GetDepthTexture() : textureManager.GetTexture(RenderTarget::ClipDepth)), nvrhi::TextureSlice());
+ 
+ 		// Copy current normals to previous (from PathTracing UAV3 output)
+ 		commandList->copyTexture(giRes->prevGBufferNormals, nvrhi::TextureSlice(), renderTargets->normalRoughness, nvrhi::TextureSlice());
+@@ -306,6 +325,15 @@ namespace Pass::Raytracing
+ 		if (!m_BindingSets[currentSlot])
+ 			return;
+ 
++        auto* camera = Scene::GetSingleton()->GetCameraData();
++        const auto spp = Scene::GetSingleton()->m_Settings.RaytracingSettings.SamplesPerPixel;
++        if (camera->FrameIndex != m_LastFrame + 1u || camera->RenderSize.x != m_LastRenderSize.x ||
++            camera->RenderSize.y != m_LastRenderSize.y || spp != m_LastSPP) m_ResetHistory = true;
++        const float dx = camera->Position.x - camera->PositionPrev.x;
++        const float dy = camera->Position.y - camera->PositionPrev.y;
++        const float dz = camera->Position.z - camera->PositionPrev.z;
++        if (dx*dx + dy*dy + dz*dz > 512.0f*512.0f) m_ResetHistory = true;
++        if (m_ResetHistory) commandList->clearBufferUInt(giRes->reservoirBuffer, 0);
+ 		FillConstantBuffer(commandList);
+ 
+ 		auto resolution = GetRenderer()->GetDynamicResolution();
+@@ -390,6 +418,10 @@ namespace Pass::Raytracing
+ 		}
+ 
+ 		// Copy current G-buffer data to previous frame buffers for next frame's temporal resampling
+-		CopyCurrentGBufferToPrevious(commandList);
++        if (!m_Hybrid) CopyCurrentGBufferToPrevious(commandList);
++        m_ResetHistory = false;
++        m_LastFrame = camera->FrameIndex;
++        m_LastRenderSize = camera->RenderSize;
++        m_LastSPP = spp;
+ 	}
+ }
+diff --git a/src/Pass/Raytracing/ReSTIRGIPass.h b/src/Pass/Raytracing/ReSTIRGIPass.h
+index 683358e..00fe0a0 100644
+--- a/src/Pass/Raytracing/ReSTIRGIPass.h
++++ b/src/Pass/Raytracing/ReSTIRGIPass.h
+@@ -38,6 +38,11 @@ namespace Pass::Raytracing
+ 		nvrhi::SamplerHandle m_LinearWrapSampler;
+ 
+ 		SceneTLAS* m_SceneTLAS;
++        bool m_Hybrid = false;
++        bool m_ResetHistory = true;
++        uint32_t m_LastFrame = 0;
++        uint2 m_LastRenderSize{};
++        int m_LastSPP = 0;
+ 
+ 		eastl::array<bool, Constants::MAX_FRAMES_IN_FLIGHT> m_BindingSetDirty {};
+ 		rtxdi::ReSTIRGI_ResamplingMode m_ResamplingMode = rtxdi::ReSTIRGI_ResamplingMode::TemporalAndSpatial;
+diff --git a/src/Pass/Raytracing/ShadowLab.cpp b/src/Pass/Raytracing/ShadowLab.cpp
+new file mode 100644
+index 0000000..0d39bf2
+--- /dev/null
++++ b/src/Pass/Raytracing/ShadowLab.cpp
+@@ -0,0 +1,91 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "ShadowLab.h"
++#include "Renderer.h"
++#include "Scene.h"
++#include "ShaderCache.h"
++
++namespace Pass {
++ShadowLab::ShadowLab(Renderer* renderer, SceneTLAS* tlas) : RenderPass(renderer),
++    m_TLAS(tlas), m_Inline(renderer->m_Settings.UseRayQuery) {
++    m_TLAS->GetTopLevelAS().AddListener(this);
++}
++void ShadowLab::CreatePipeline() {
++    auto* device = GetRenderer()->GetDevice();
++    m_Compute = nullptr; m_Pipeline = nullptr; m_Table = nullptr;
++    m_Bindings.fill(nullptr);
++    nvrhi::BindingLayoutDesc layout;
++    layout.visibility = m_Inline ? nvrhi::ShaderType::Compute : nvrhi::ShaderType::AllRayTracing;
++    layout.bindings = {
++        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
++        nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
++        nvrhi::BindingLayoutItem::RayTracingAccelStruct(0),
++        nvrhi::BindingLayoutItem::Texture_UAV(0)};
++    m_Layout = device->createBindingLayout(layout);
++    if (!m_Layout) return;
++    eastl::vector<DxcDefine> defines{{L"RTLAB_INLINE", m_Inline ? L"1" : L"0"}};
++    auto blob = ShaderCache::GetShader(L"data/shaders/raytracing/ShadowLab/ShadowLab.hlsl",
++        defines, m_Inline ? L"cs_6_5" : L"lib_6_5", L"Main");
++    if (!blob) { logger::error("ShadowLab: shader compilation failed"); return; }
++    if (m_Inline) {
++        auto shader = device->createShader({nvrhi::ShaderType::Compute, "ShadowLab", "Main"},
++            blob->GetBufferPointer(), blob->GetBufferSize());
++        if (shader) m_Compute = device->createComputePipeline(nvrhi::ComputePipelineDesc()
++            .setComputeShader(shader).addBindingLayout(m_Layout));
++    } else {
++        auto library = device->createShaderLibrary(blob->GetBufferPointer(), blob->GetBufferSize());
++        if (!library) return;
++        nvrhi::rt::PipelineDesc pipeline;
++        pipeline.shaders = {
++            {"RayGen", library->getShader("Main", nvrhi::ShaderType::RayGeneration), nullptr},
++            {"Miss", library->getShader("Miss", nvrhi::ShaderType::Miss), nullptr}};
++        pipeline.hitGroups = {{"HitGroup", library->getShader("ClosestHit", nvrhi::ShaderType::ClosestHit),
++            nullptr, nullptr, nullptr, false}};
++        pipeline.addBindingLayout(m_Layout);
++        pipeline.maxPayloadSize = sizeof(float);
++        pipeline.maxRecursionDepth = 1;
++        m_Pipeline = device->createRayTracingPipeline(pipeline);
++        if (m_Pipeline) {
++            m_Table = m_Pipeline->createShaderTable(nvrhi::rt::ShaderTableDesc().setDebugName("ShadowLab SBT"));
++            if (m_Table) {
++                m_Table->setRayGenerationShader("RayGen");
++                m_Table->addMissShader("Miss");
++                m_Table->addHitGroup("HitGroup");
++            }
++        }
++    }
++    logger::info("ShadowLab (Community Shaders + Creation Engine Raytracing): {} pipeline {}",
++        m_Inline ? "DXR inline" : "DXR SBT", (m_Compute || (m_Pipeline && m_Table)) ? "created" : "FAILED");
++}
++void ShadowLab::Execute(nvrhi::ICommandList* commands) {
++    auto* renderer = GetRenderer();
++    const auto slot = renderer->GetCurrentSlot();
++    const auto resolution = renderer->GetDynamicResolution();
++    commands->clearTextureFloat(renderer->GetMainTexture(), nvrhi::AllSubresources, nvrhi::Color(0.f));
++    if ((!m_Compute && !(m_Pipeline && m_Table)) || !resolution.x || !resolution.y) return;
++    if (!m_Bindings[slot]) {
++        nvrhi::BindingSetDesc bindings;
++        bindings.bindings = {
++            nvrhi::BindingSetItem::ConstantBuffer(0, Scene::GetSingleton()->GetCameraBuffer()),
++            nvrhi::BindingSetItem::ConstantBuffer(1, m_TLAS->GetRaytracingBuffer()),
++            nvrhi::BindingSetItem::RayTracingAccelStruct(0, m_TLAS->GetTopLevelAS().GetHandle()),
++            nvrhi::BindingSetItem::Texture_UAV(0, renderer->GetMainTexture())};
++        m_Bindings[slot] = renderer->GetDevice()->createBindingSet(bindings, m_Layout);
++    }
++    if (!m_Bindings[slot]) return;
++    commands->beginMarker("ShadowLab: primary and sun visibility");
++    if (m_Inline) {
++        nvrhi::ComputeState state;
++        state.pipeline = m_Compute; state.bindings = {m_Bindings[slot]};
++        commands->setComputeState(state);
++        commands->dispatch((resolution.x + 7u) / 8u, (resolution.y + 7u) / 8u);
++    } else {
++        nvrhi::rt::State state;
++        state.shaderTable = m_Table; state.bindings = {m_Bindings[slot]};
++        commands->setRayTracingState(state);
++        nvrhi::rt::DispatchRaysArguments args;
++        args.width = resolution.x; args.height = resolution.y;
++        commands->dispatchRays(args);
++    }
++    commands->endMarker();
++}
++}
+diff --git a/src/Pass/Raytracing/ShadowLab.h b/src/Pass/Raytracing/ShadowLab.h
+new file mode 100644
+index 0000000..c6283ae
+--- /dev/null
++++ b/src/Pass/Raytracing/ShadowLab.h
+@@ -0,0 +1,23 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++#include "Pass/RenderPass.h"
++#include "Pass/Raytracing/Common/SceneTLAS.h"
++#include "Events/ITLASUpdateListener.h"
++
++namespace Pass {
++class ShadowLab final : public RenderPass, public ITLASUpdateListener {
++    SceneTLAS* m_TLAS;
++    bool m_Inline;
++    nvrhi::BindingLayoutHandle m_Layout;
++    nvrhi::ComputePipelineHandle m_Compute;
++    nvrhi::rt::PipelineHandle m_Pipeline;
++    nvrhi::rt::ShaderTableHandle m_Table;
++    eastl::array<nvrhi::BindingSetHandle, Constants::MAX_FRAMES_IN_FLIGHT> m_Bindings{};
++public:
++    ShadowLab(Renderer* renderer, SceneTLAS* tlas);
++    void OnTLASResized([[maybe_unused]] TopLevelAS& tlas) override { m_Bindings.fill(nullptr); }
++    void ResolutionChanged([[maybe_unused]] uint2 resolution) override { m_Bindings.fill(nullptr); }
++    void CreatePipeline() override;
++    void Execute(nvrhi::ICommandList* commands) override;
++};
++}
+diff --git a/src/Pass/Utility/PostProcess.cpp b/src/Pass/Utility/PostProcess.cpp
+index 03bac39..47c1e48 100644
+--- a/src/Pass/Utility/PostProcess.cpp
++++ b/src/Pass/Utility/PostProcess.cpp
+@@ -65,6 +65,7 @@ namespace Pass::Utility
+ 			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(3)); // AlbedoTexture
+ 			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(4)); // GNMAOTexture
+ 			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(2)); // OutSpecularAlbedo
++			bindingLayoutDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(3)); // OutDiffuseAlbedo
+ 			defines.push_back({ L"DLSS_RR", L"1" });
+ 		}
+ 
+@@ -117,7 +118,8 @@ namespace Pass::Utility
+ 			nvrhi::BindingSetItem::Texture_SRV(0, sourceDepth),
+ 			nvrhi::BindingSetItem::Texture_SRV(1, renderTargets ? renderTargets->normalRoughness.Get() : nullptr),
+ 			nvrhi::BindingSetItem::Texture_SRV(2, sourceMotionVectors),
+-			nvrhi::BindingSetItem::Texture_UAV(0, textureManager.GetTexture(RenderTarget::DownscaledNormalRoughness)),
++			nvrhi::BindingSetItem::Texture_UAV(0, textureManager.GetTexture(m_Denoiser == Denoiser::DLSS_RR ?
++				RenderTarget::RRNormalRoughness : RenderTarget::DownscaledNormalRoughness)),
+ 			nvrhi::BindingSetItem::Texture_UAV(1, textureManager.GetTexture(RenderTarget::DownscaledMotionVectors))
+ 		};
+ 
+@@ -129,6 +131,7 @@ namespace Pass::Utility
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(3, renderTargets->albedo));
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_SRV(4, renderTargets->gnmao));
+ 			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(2, textureManager.GetTexture(RenderTarget::RRSpecularAlbedo)));
++			bindingSetDesc.addItem(nvrhi::BindingSetItem::Texture_UAV(3, textureManager.GetTexture(RenderTarget::RRDiffuseAlbedo)));
+ 		}
+ 
+ 		m_BindingSets[currentSlot] = renderer->GetDevice()->createBindingSet(bindingSetDesc, m_BindingLayout);
+diff --git a/src/Renderer.cpp b/src/Renderer.cpp
+index ecb96cb..fbb69d0 100644
+--- a/src/Renderer.cpp
++++ b/src/Renderer.cpp
+@@ -489,7 +489,7 @@ void Renderer::SetResolution(uint2 resolution)
+ 		return;
+ 
+ 	m_RenderSize = resolution;
+-
++    if (m_ReSTIRGIResources) InitReSTIRGI();
+ 	m_RenderGraph->ResolutionChanged(m_RenderSize);
+ 
+ 	logger::info("Resolution set to {}x{}", resolution.x, resolution.y);
+diff --git a/src/Renderer/RenderTargetManager.cpp b/src/Renderer/RenderTargetManager.cpp
+index 13b4e54..26aa3b3 100644
+--- a/src/Renderer/RenderTargetManager.cpp
++++ b/src/Renderer/RenderTargetManager.cpp
+@@ -34,6 +34,7 @@ nvrhi::ITexture* RenderTargetManager::GetTexture(Texture texture, uint32_t slot)
+ 			desc.format = nvrhi::Format::R11G11B10_FLOAT;
+ 			break;
+ 		case RenderTarget::MotionVectors3D:
++		case RenderTarget::RRNormalRoughness:
+ 			desc.format = nvrhi::Format::RGBA16_FLOAT;
+ 			break;
+ 		case RenderTarget::DiffuseAlbedo:
+@@ -162,4 +163,4 @@ void RenderTargetManager::CopySharedTextures(nvrhi::ICommandList* commandList, u
+ 			commandList->copyTexture(rt.sharedD3D12Handle, nvrhi::TextureSlice(), rt.handle, nvrhi::TextureSlice());
+ 		}
+ 	}
+-}
+\ No newline at end of file
++}
+diff --git a/src/Renderer/RenderTargetManager.h b/src/Renderer/RenderTargetManager.h
+index faa9540..e89e029 100644
+--- a/src/Renderer/RenderTargetManager.h
++++ b/src/Renderer/RenderTargetManager.h
+@@ -23,6 +23,7 @@ struct RenderTargetManager
+ 		SpecularFactor,
+ 		RRSpecularAlbedo = SpecularFactor,
+ 		RRSpecularHitDist,
++		RRNormalRoughness,
+ 		DownscaledMotionVectors,
+ 		DownscaledNormalRoughness,
+ 		Accumulation,
+@@ -41,4 +42,4 @@ struct RenderTargetManager
+ 	void CopySharedTextures(nvrhi::ICommandList* commandList, uint32_t slot);
+ };
+ 
+-using RenderTarget = RenderTargetManager::Texture;
+\ No newline at end of file
++using RenderTarget = RenderTargetManager::Texture;
+diff --git a/src/Scene.cpp b/src/Scene.cpp
+index 5fc716d..7844daf 100644
+--- a/src/Scene.cpp
++++ b/src/Scene.cpp
+@@ -27,7 +27,7 @@
+ #include "Pass/Raytracing/GBuffer.h"
+ #include "Pass/Raytracing/PathTracing.h"
+ #include "Pass/Raytracing/ReSTIRGIPass.h"
+-#include "Pass/Raytracing/Debug.h"
++#include "Pass/Raytracing/ShadowLab.h"
+ #include "Pass/Raster/GBuffer.h"
+ #include "Pass/NRD/NRDIntegration.h"
+ #include "Pass/Raytracing/Common/Accumulation.h"
+@@ -120,6 +120,7 @@ void Scene::UpdateMode(Mode mode)
+ 		renderGraph->AddNode({ true, "NRD Reblur Radiance", eastl::move(nrdReblurPass) });
+ 		renderGraph->AddNode({ true, "NRD Relax Radiance", eastl::move(nrdRelaxPass) });
+ 		renderGraph->AddNode({ true, "GI Composite", eastl::move(giComposite) });
++        renderGraph->AddNode({ true, "Hybrid ReSTIR GI", eastl::make_unique<Pass::Raytracing::ReSTIRGIPass>(renderer, tlasPtr) });
+ 	}
+ 	else if (mode == Mode::PathTracing) {
+ 		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
+@@ -156,7 +157,7 @@ void Scene::UpdateMode(Mode mode)
+ 		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
+ 		auto transformComp = eastl::make_unique<Pass::TransformComposition>(renderer);
+ 		auto sceneTLAS = eastl::make_unique<Pass::SceneTLAS>(renderer);
+-		auto debugPass = eastl::make_unique<Pass::Debug>(renderer, sceneTLAS.get());
++		auto debugPass = eastl::make_unique<Pass::ShadowLab>(renderer, sceneTLAS.get());
+ 
+ 		renderGraph->AddNode({ true, "Skinning", eastl::move(skinning) });
+ 		renderGraph->AddNode({ true, "Transform Composition", eastl::move(transformComp) });
+diff --git a/src/Utils/Shader.cpp b/src/Utils/Shader.cpp
+index 8924a7b..51e7f98 100644
+--- a/src/Utils/Shader.cpp
++++ b/src/Utils/Shader.cpp
+@@ -93,6 +93,10 @@ namespace Util
+ 			// No water in GI
+ 			auto instanceMask = InstanceMask::All & ~InstanceMask::Water;
+ 			defines.emplace_back(L"INSTANCE_MASK", instanceMask);
++            if (!sharcUpdate && settings.ReSTIRGI.Enabled &&
++                settings.ReSTIRGI.ResamplingMode != ReSTIRGIResamplingMode::None &&
++                (settings.GeneralSettings.Denoiser == Denoiser::None || settings.GeneralSettings.Denoiser == Denoiser::DLSS_RR))
++                defines.emplace_back(L"HYBRID_RESTIR", L"1");
+ 
+ 			if (!sharc || (sharc && !sharcUpdate)) {
+ 				if (settings.GeneralSettings.Denoiser == Denoiser::NRD_Reblur) {

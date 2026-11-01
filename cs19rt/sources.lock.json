@@ -1,0 +1,29 @@
+{
+  "cs": {
+    "url": "https://github.com/community-shaders/skyrim-community-shaders.git",
+    "commit": "5db085e77951b84bd6c191ff5b06d56893f08286",
+    "version": "1.9.0",
+    "vcpkg": "dddca6fa87f177e0678e2545c4b4636a44aa05bd",
+    "submodules": ["extern/CommonLibSSE-NG", "extern/Streamline-DX12", "extern/FidelityFX-SDK"],
+    "streamline": "e8aaa6eaac968711fb62473d4ae8256dde20919b"
+  },
+  "rt_host": {
+    "comment": "Gistix raytracing-plugin branch. Its RT delta (from the merged dev snapshot c7270bb2) is ported in patches/cs19-rt.patch; the Streamline/DLSS-RR runtime DLLs are taken verbatim from this commit.",
+    "commit": "84114745a7ee9991bc0543d7a5740cbd09688b1f",
+    "dev_base": "c7270bb22c473dde6cdee551e8099c2fdc742a8b",
+    "binary_paths": ["features/Upscaling/Shaders/Upscaling/Streamline"]
+  },
+  "cer": {
+    "url": "https://github.com/Gistix/CreationEngineRaytracing.git",
+    "commit": "09350844e63f602a3b788f1c815d29cee1b4fab2",
+    "vcpkg": "30ef65cad98f08e7197c9a1656fbd871bcb72f2d",
+    "submodules": ["extern/CommonLibSSE-NG", "extern/NVRHI", "extern/NRD", "extern/RTXDI-Library"]
+  },
+  "patches": {
+    "cs": ["cs19-rt.patch"],
+    "cer": ["cer-legacy.patch", "cer-boot-gate.patch"]
+  },
+  "dxc_url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/dxc_2025_07_14.zip",
+  "dxc_sha256": "9ad895a6b039e3a8f8c22a1009f866800b840a74b50db9218d13319e215ea8a4",
+  "abi": "20261031"
+}
