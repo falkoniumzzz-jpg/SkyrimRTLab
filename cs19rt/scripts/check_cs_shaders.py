@@ -93,7 +93,9 @@ def main():
         file, profile, entry, defines = key
         args = [str(fxc), "/nologo", "/T", profile, "/E", entry, "/O1", "/I", str(tree)]
         for d in defines:
-            args += ["/D", d if "=" in d else d + "="]
+            # fxc reads "/D NAME=" (empty value) as taking the *next* token as its value,
+            # so a value-less define must be passed as "/D NAME" (defined as 1).
+            args += ["/D", d]
         args += ["/Fo", os.devnull, str(tree / file)]
         r = subprocess.run(args, cwd=tree, capture_output=True, text=True, errors="replace")
         return key, r.returncode, (r.stdout + r.stderr)
@@ -120,6 +122,13 @@ def main():
                    + "== RT regressions ==\n" + "\n\n".join(regressions)
                    + "\n\n== also failing without RT ==\n" + "\n\n".join(baseline_failures[:20]), encoding="utf-8")
     print(f"{len(results)} CS shader compiles, {len(regressions)} RT regressions, {len(baseline_failures)} baseline failures", flush=True)
+    baselines = sum(1 for job in jobs if job[4] is not None)
+    if baselines and len(baseline_failures) * 10 > baselines:
+        # Unmodified CS 1.9 permutations must compile; otherwise this check itself is broken
+        # and an RT regression could hide among the "baseline" failures.
+        print("Check setup invalid: too many CS 1.9 baseline permutations fail.\n")
+        print("\n\n".join(baseline_failures[:5]))
+        sys.exit(2)
     if regressions:
         print("\n\n".join(regressions[:10]))
         sys.exit(1)
