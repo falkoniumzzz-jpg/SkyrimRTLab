@@ -1,0 +1,31 @@
+diff --git a/src/Core/Mesh/BaseMesh.cpp b/src/Core/Mesh/BaseMesh.cpp
+index 9644032..e45a336 100644
+--- a/src/Core/Mesh/BaseMesh.cpp
++++ b/src/Core/Mesh/BaseMesh.cpp
+@@ -96,6 +96,13 @@ BaseMesh::BufferDescriptor BaseMesh::CreateIndexBuffer(RE::BSGraphics::TriShape*
+ 	auto* indexBufferDX12 = Util::Adapter::GetIndexBufferDX12(triShape);
+ 	auto* indexBuffer11 = Util::Adapter::GetD3D11IndexBuffer(triShape);
+ 
++	// RTLab: some runtime geometry (seen on a "Permanent Decal" shape) has no shared DX12 buffer.
++	// Leave such a shape out of RT instead of dereferencing null (crash at this line before).
++	if (!indexBufferDX12 || !indexBuffer11) {
++		logger::debug("BaseMesh::CreateIndexBuffer - No shared index buffer, shape skipped.");
++		return indexBuffer;
++	}
++
+ 	auto indexDesc = indexBufferDX12->GetDesc();
+ 
+ 	D3D11_BUFFER_DESC indexDesc11;
+@@ -143,6 +150,12 @@ BaseMesh::BufferDescriptor BaseMesh::CreateVertexBuffer(RE::BSGraphics::TriShape
+ 	auto* vertexBufferDX12 = Util::Adapter::GetVertexBufferDX12(triShape);
+ 	auto* vertexBuffer11 = Util::Adapter::GetD3D11VertexBuffer(triShape);
+ 
++	// RTLab: same guard as CreateIndexBuffer.
++	if (!vertexBufferDX12 || !vertexBuffer11) {
++		logger::debug("BaseMesh::CreateVertexBuffer - No shared vertex buffer, shape skipped.");
++		return vertexBuffer;
++	}
++
+ 	auto vertexDesc = vertexBufferDX12->GetDesc();
+ 
+ 	D3D11_BUFFER_DESC vertexDesc11;
