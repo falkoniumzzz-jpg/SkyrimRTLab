@@ -86,6 +86,41 @@ def summarize_compile_errors(label):
     print("::endgroup::", flush=True)
 
 
+def diagnose_unresolved(build, env):
+    """After LNK2019/LNK2001: did every compiled object reach the link, and which define the symbol?"""
+    log = OUT / "logs/cs-build.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    names = sorted(set(re.findall(r"unresolved external symbol .*?\((\?[^)\s]+)\)", text)))
+    if not names:
+        return
+    lines = []
+    try:
+        objdir = build / "CMakeFiles/CommunityShaders.dir"
+        objs = sorted(objdir.rglob("*.obj"))
+        lines.append(f"{len(objs)} objects under {objdir}")
+        rsp = build / "CMakeFiles/CommunityShaders.rsp"
+        if rsp.exists():
+            listed = rsp.read_text(encoding="utf-8", errors="replace").replace("/", "\\").lower()
+            missing = [o for o in objs if str(o.relative_to(build)).replace("/", "\\").lower() not in listed]
+            lines.append(f"objects missing from {rsp.name}: {len(missing)}")
+            lines += ["  " + str(o.relative_to(build)) for o in missing[:50]]
+        else:
+            lines.append(f"{rsp} not found")
+        for name in names:
+            hits = [o for o in objs if name.encode() in o.read_bytes()]
+            lines.append(f"{name}: named in {len(hits)} object(s)")
+            for o in hits[:6]:
+                out = subprocess.run(["dumpbin", "/nologo", "/symbols", str(o)], env=env,
+                    capture_output=True, text=True, errors="replace").stdout
+                lines += [f"  {o.relative_to(build)}: {l.strip()}" for l in out.splitlines() if name in l]
+    except Exception as e:  # diagnostics must never hide the real failure
+        lines.append(f"diagnostics failed: {e!r}")
+    (OUT / "logs/cs-link-diagnostics.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("::group::cs-link diagnostics", flush=True)
+    print("\n".join(lines), flush=True)
+    print("::endgroup::", flush=True)
+
+
 def build_cs(cs, vs):
     vcpkg = vcpkg_for("cs")
     env = msvc_env(vs)
@@ -112,6 +147,7 @@ def build_cs(cs, vs):
         run("cs-build", ["cmake", "--build", build, "--target", "CommunityShaders", "--parallel", "4", "--", "-k", "0"], env=env)
     except RuntimeError:
         summarize_compile_errors("cs-build")
+        diagnose_unresolved(build, env)
         raise
     return build
 

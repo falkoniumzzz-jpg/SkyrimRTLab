@@ -4860,6 +4860,50 @@ index 0000000..f0ad8e4
 +		}
 +	};
 +};
+diff --git a/src/Features/RemoteControl/DevBenchBridge.cpp b/src/Features/RemoteControl/DevBenchBridge.cpp
+index d3f03a7..ef1bc2c 100644
+--- a/src/Features/RemoteControl/DevBenchBridge.cpp
++++ b/src/Features/RemoteControl/DevBenchBridge.cpp
+@@ -658,18 +658,5 @@ namespace DevBenchBridge
+ 	}
+ }
+ 
+-#else
+-
+-namespace DevBenchBridge
+-{
+-	/**
+- * @brief Registers Community Shaders tools with the DevBench bridge if available.
+- *
+- * When the DevBench interface is present, registers tool handlers for feature management,
+- * inspection, shader caching, capture operations, and settings persistence.
+- * If DevBench is unavailable, no action is taken.
+- */
+-void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
+-}
+-
++// Without DEVBENCH_BRIDGE_ENABLED, Install() is the inline no-op in DevBenchBridge.h.
+ #endif
+diff --git a/src/Features/RemoteControl/DevBenchBridge.h b/src/Features/RemoteControl/DevBenchBridge.h
+index 571a556..f70ba06 100644
+--- a/src/Features/RemoteControl/DevBenchBridge.h
++++ b/src/Features/RemoteControl/DevBenchBridge.h
+@@ -16,7 +16,14 @@
+  */
+ namespace DevBenchBridge
+ {
++#ifdef DEVBENCH_BRIDGE_ENABLED
+ 	// Fetch the devbench interface (after kPostLoad) and register our tools. No-op if
+-	// devbench is not present or the bridge was built disabled. Safe to call always.
++	// devbench is not present. Safe to call always.
+ 	void Install();
++#else
++	// Built with -DDEVBENCH_BRIDGE=OFF: nothing to register. Defined inline here so the
++	// caller never depends on DevBenchBridge.cpp's object (it failed to resolve under the
++	// Ninja/MSVC 14.51 link of the FalkosLichtspiel CI build).
++	inline void Install() {}
++#endif
+ }
 diff --git a/src/Features/SceneGraphExplorer.cpp b/src/Features/SceneGraphExplorer.cpp
 new file mode 100644
 index 0000000..9be4577
