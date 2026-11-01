@@ -2717,10 +2717,10 @@ index e20e3af..09b384e 100644
  
 diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
 new file mode 100644
-index 0000000..9da3059
+index 0000000..7dfb2f9
 --- /dev/null
 +++ b/src/Features/Raytracing.cpp
-@@ -0,0 +1,1723 @@
+@@ -0,0 +1,1725 @@
 +#include "Raytracing.h"
 +
 +#include "Globals.h"
@@ -4211,16 +4211,18 @@ index 0000000..9da3059
 +	// SSAO management
 +	{
 +		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
-+		auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
++		// CS 1.9's CommonLib types this field as SAOEffectParams*; enableSAO is the byte at +0x50
++		// that the RT branch poked by hand (bSAOEnable:Display).
++		auto* saoParams = imageSpaceManager ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH : nullptr;
 +
-+		// Toggle vanilla SSAO - Doesn't work for SE?
-+		static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
-+		if (enableSSAO)
++		// Remember whether vanilla SSAO was on before RT turned it off (same pattern as fog).
++		if (saoParams && saoParams->enableSAO)
 +			ssaoEnabled = true;
 +
 +		const bool shouldEnableSSAO = (globalIllumation || pathtracing || debug) ? false : ssaoEnabled;
 +
-+		*enableSSAO = shouldEnableSSAO;
++		if (saoParams)
++			saoParams->enableSAO = shouldEnableSSAO;
 +
 +		// Toggle vanilla SSAO v2
 +		if (auto iniSettingCollection = globals::game::iniPrefSettingCollection)
