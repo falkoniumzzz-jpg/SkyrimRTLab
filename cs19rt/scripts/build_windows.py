@@ -188,8 +188,10 @@ def stage_runtime(cs, cer, cs_build, cer_build):
     for rel in NOT_SHIPPED:
         if (stage / rel).exists():
             (stage / rel).unlink()
+    # Test builds keep the PDBs next to the DLLs (as CS's own install rules do): Crash Logger
+    # needs them for readable crash logs and for thread dumps (Ctrl+Shift+F12) during a hang.
     for p in list(stage.rglob("*")):
-        if p.is_file() and ("community shaders logo" in str(p).lower() or p.suffix.lower() == ".pdb"):
+        if p.is_file() and "community shaders logo" in str(p).lower():
             p.unlink()
     required = ["SKSE/Plugins/CommunityShaders.dll", "SKSE/Plugins/CreationEngineRaytracing.dll",
         "SKSE/Plugins/dxcompiler.dll", "SKSE/Plugins/D3D12Core.dll", "Shaders/Lighting.hlsl",

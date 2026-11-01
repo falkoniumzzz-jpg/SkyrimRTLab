@@ -33,10 +33,19 @@ Das CS-Menü öffnest du mit **Ende**, dort unter *Raytracing*.
 3. **ReSTIR:** Schalte ReSTIR GI ein und aus.
 4. **Pathtracing → RTGI:** Wechsle von PT auf RTGI. Siehst du Ghosting?
 
+## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
+
+1. Drücke **Strg+Umschalt+F12**, solange das Spiel hängt. Crash Logger schreibt dann
+   einen Thread-Dump in den SKSE-Ordner.
+2. Warte etwa zehn Sekunden. Beende das Spiel erst danach.
+3. Notiere, was du gerade gemacht hast (Tür, Schnellreise, Spielstand laden) und ob die
+   Spielzeit im CS-Editor pausiert war.
+
 ## Bitte zurückmelden
 
 - **FPS:** die Werte aus A, B und C.
 - **Abstürze:** Datei `crash-*.log` von Crash Logger.
+- **Hänger:** den Thread-Dump von Crash Logger und in welchem Lauf (A, B oder C) es passiert ist.
 - **Logs:** `CommunityShaders.log` und `CreationEngineRaytracing.log` (beide in
   `Documents/My Games/Skyrim Special Edition/SKSE/`).
 - **Bildfehler:** Screenshot mit kurzer Beschreibung.
