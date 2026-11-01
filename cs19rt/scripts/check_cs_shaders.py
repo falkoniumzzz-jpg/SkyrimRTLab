@@ -80,6 +80,8 @@ def main():
     p.add_argument("--cs", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     a = p.parse_args()
+    # fxc runs with cwd=tree, so every path it receives must be absolute.
+    a.cs, a.out = a.cs.resolve(), a.out.resolve()
     tree = merged_tree(a.cs, a.out / "aio-shaders")
     fxc = find_fxc()
     jobs = jobs_from_config(a.cs)
