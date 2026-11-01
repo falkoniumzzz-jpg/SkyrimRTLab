@@ -243,7 +243,8 @@ def corresponding_source():
                         continue
                     if p.suffix.lower() in (".obj", ".pch", ".pdb", ".exe", ".dll", ".lib", ".zip", ".7z", ".tar", ".gz"):
                         continue
-                    z.write(p, str(Path(prefix) / rel))
+                    if p.is_file():  # skips broken links, as the legacy pipeline did
+                        z.write(p, str(Path(prefix) / rel))
 
 
 def mo2_package(runtime, output):

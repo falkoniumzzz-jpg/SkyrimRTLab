@@ -1,3 +1,28 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 430e9a9..27e0e29 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -167,11 +167,18 @@ target_link_libraries(
+         windowscodecs
+ )
+ 
+-# devbench bridge: opt-out via -DDEVBENCH_BRIDGE=OFF. When off, the port isn't required
+-# and DevBenchBridge.cpp compiles to an empty Install().
++# devbench bridge: opt-out via -DDEVBENCH_BRIDGE=OFF. When off, the port isn't required,
++# DevBenchBridge.h supplies an inline no-op Install() and DevBenchBridge.cpp is not compiled:
++# MSVC does not recognise raw string literals inside a skipped #ifdef group, so the "/*" in
++# the file's JSON tool descriptors ("CommunityShaders/*.json") opens a phantom comment that
++# swallows the rest of the file (LNK2019 for Install(), or C1071 at end of file).
+ if(DEVBENCH_BRIDGE)
+     target_link_libraries(${PROJECT_NAME} PRIVATE DevBench::API)
+     target_compile_definitions(${PROJECT_NAME} PRIVATE DEVBENCH_BRIDGE_ENABLED)
++else()
++    set_source_files_properties(
++        "${CMAKE_CURRENT_SOURCE_DIR}/src/Features/RemoteControl/DevBenchBridge.cpp"
++        PROPERTIES HEADER_FILE_ONLY ON)
+ endif()
+ # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
+ if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
 diff --git a/features/Raytracing/Shaders/Features/Raytracing.ini b/features/Raytracing/Shaders/Features/Raytracing.ini
 new file mode 100644
 index 0000000..19f0144
@@ -4861,10 +4886,19 @@ index 0000000..f0ad8e4
 +	};
 +};
 diff --git a/src/Features/RemoteControl/DevBenchBridge.cpp b/src/Features/RemoteControl/DevBenchBridge.cpp
-index d3f03a7..ef1bc2c 100644
+index d3f03a7..894d2f9 100644
 --- a/src/Features/RemoteControl/DevBenchBridge.cpp
 +++ b/src/Features/RemoteControl/DevBenchBridge.cpp
-@@ -658,18 +658,5 @@ namespace DevBenchBridge
+@@ -2,7 +2,7 @@
+ 
+ // Registers our tools into the devbench test bench over its C-ABI. Gated by
+ // DEVBENCH_BRIDGE_ENABLED (set by CMake when the devbench-api port is available);
+-// otherwise this file compiles to an empty Install(). Inert at runtime when no
++// otherwise CMake leaves this file out and DevBenchBridge.h supplies an empty Install(). Inert at runtime when no
+ // devbench plugin is present (GetDevBenchInterface001() returns null).
+ //
+ // The communityshaders.* tools below expose Community Shaders' graphics-feature, inspect,
+@@ -658,18 +658,6 @@ namespace DevBenchBridge
  	}
  }
  
@@ -4882,10 +4916,11 @@ index d3f03a7..ef1bc2c 100644
 -void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
 -}
 -
-+// Without DEVBENCH_BRIDGE_ENABLED, Install() is the inline no-op in DevBenchBridge.h.
++// Without DEVBENCH_BRIDGE_ENABLED, Install() is the inline no-op in DevBenchBridge.h and
++// CMake does not compile this file at all (see the devbench block in CMakeLists.txt).
  #endif
 diff --git a/src/Features/RemoteControl/DevBenchBridge.h b/src/Features/RemoteControl/DevBenchBridge.h
-index 571a556..f70ba06 100644
+index 571a556..676d4f4 100644
 --- a/src/Features/RemoteControl/DevBenchBridge.h
 +++ b/src/Features/RemoteControl/DevBenchBridge.h
 @@ -16,7 +16,14 @@
@@ -4898,9 +4933,9 @@ index 571a556..f70ba06 100644
 +	// devbench is not present. Safe to call always.
  	void Install();
 +#else
-+	// Built with -DDEVBENCH_BRIDGE=OFF: nothing to register. Defined inline here so the
-+	// caller never depends on DevBenchBridge.cpp's object (it failed to resolve under the
-+	// Ninja/MSVC 14.51 link of the FalkosLichtspiel CI build).
++	// Built with -DDEVBENCH_BRIDGE=OFF: nothing to register. Defined inline here because
++	// CMake then leaves DevBenchBridge.cpp out of the build: MSVC misreads its raw string
++	// literals inside the skipped #ifdef group (a "/*" in them opens a phantom comment).
 +	inline void Install() {}
 +#endif
  }
