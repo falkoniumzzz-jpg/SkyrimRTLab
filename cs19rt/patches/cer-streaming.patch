@@ -1,5 +1,58 @@
+diff --git a/src/Core/BLASCluster.cpp b/src/Core/BLASCluster.cpp
+index 08c4a86..fa6dc98 100644
+--- a/src/Core/BLASCluster.cpp
++++ b/src/Core/BLASCluster.cpp
+@@ -186,8 +186,9 @@ uint32_t BLASCluster::Update()
+ 
+ 	const bool skipInstanceLights = scene->m_Settings.ExperimentalSettings.GlobalLights;
+ 
+-	// Only those who affect geometry count or its flags
+-	if (m_DirtyFlags.any(DirtyFlags::Visibility, DirtyFlags::Mesh, DirtyFlags::Alpha)) {
++	// Only those who affect geometry count or its flags.
++	// RTLab: a cluster whose build was deferred this frame keeps the geometry of its last build.
++	if (!m_RTLabBuildDeferred && m_DirtyFlags.any(DirtyFlags::Visibility, DirtyFlags::Mesh, DirtyFlags::Alpha)) {
+ 		m_Flags.reset(Flags::Updatable, Flags::TwoSided);
+ 
+ 		m_GeometryDescs.clear();
+@@ -242,7 +243,8 @@ uint32_t BLASCluster::Update()
+ 		}
+ 	}
+ 
+-	const uint32_t meshCount = static_cast<uint32_t>(m_GeometrySlots.size());
++	// RTLab: a deferred cluster that was never built has no BLAS to put into the TLAS yet.
++	const uint32_t meshCount = (m_RTLabBuildDeferred && !m_BLAS) ? 0u : static_cast<uint32_t>(m_GeometrySlots.size());
+ 
+ 	m_IsValid = meshCount > 0;
+ 	if (m_IsValid) {
+diff --git a/src/Core/BLASCluster.h b/src/Core/BLASCluster.h
+index 3a46cfe..2c7a86d 100644
+--- a/src/Core/BLASCluster.h
++++ b/src/Core/BLASCluster.h
+@@ -75,6 +75,14 @@ class BLASCluster
+ 
+ 	bool m_IsValid = false;
+ 
++	// RTLab build budget (see SceneGraph::RTLabSelectClusterBuilds). A deferred cluster keeps the
++	// geometry, slots and BLAS of its last build until it is built again, so the TLAS stays consistent.
++	bool m_RTLabBuildDeferred = false;
++	bool m_RTLabNeverDefer = false;     // sub-index segment clusters: their meshes are freed without a GPU fence
++	bool m_RTLabForceBuild = false;     // a mesh destroyed since the last build is still referenced by it
++	uint16_t m_RTLabDeferredFrames = 0;
++	eastl::vector<BaseMesh*> m_RTLabStaleMembers;  // removed since the last build, still in the last BLAS
++
+ 	void UpdateTransform();
+ 	BuildMode DetermineBuildMode(SceneGraph* sceneGraph, uint64_t frameIndex);
+ 
+@@ -116,4 +124,7 @@ public:
+ 	const auto& GetGeometrySlots() const { return m_GeometrySlots; }
+ 
+ 	void WriteInstanceData(uint32_t firstMesh, uint32_t meshCount, InstanceData& instanceData) const;
++
++	// RTLab VRAM log: size of this cluster's acceleration structure.
++	uint64_t RTLabGetBLASBytes() const { return m_BLAS ? m_BLAS->getBufferSize() : 0; }
+ };
 diff --git a/src/Core/TextureManager.cpp b/src/Core/TextureManager.cpp
-index b51563c..5bc3bd8 100644
+index b51563c..cb73c33 100644
 --- a/src/Core/TextureManager.cpp
 +++ b/src/Core/TextureManager.cpp
 @@ -1,6 +1,8 @@
@@ -11,7 +64,25 @@ index b51563c..5bc3bd8 100644
  TextureReference::TextureReference(nvrhi::TextureHandle texture, DescriptorTableManager* descriptorTableManager) :
  	texture(texture)
  {
-@@ -73,6 +75,26 @@ eastl::shared_ptr<DescriptorHandle> TextureManager::GetDescriptor(RE::BSGraphics
+@@ -52,6 +54,17 @@ uint64_t TextureManager::GetFakeDoubledVRAMUsage()
+ 	return vramUsage;
+ }
+ 
++void TextureManager::RTLabTextureStats(size_t& a_count, uint64_t& a_bytes)
++{
++	std::scoped_lock lock(m_TexturesMutex);
++	a_count = m_Textures.size();
++	a_bytes = 0;
++	for (const auto& [key, texture] : m_Textures) {
++		if (texture)
++			a_bytes += texture->size;
++	}
++}
++
+ void TextureManager::ReleaseTexture(RE::BSGraphics::Texture* texture)
+ {
+ 	if (!texture)
+@@ -73,6 +86,26 @@ eastl::shared_ptr<DescriptorHandle> TextureManager::GetDescriptor(RE::BSGraphics
  			return refIt->second->descriptorHandle;
  	}
  
@@ -39,7 +110,7 @@ index b51563c..5bc3bd8 100644
  	auto d3d11Texture = reinterpret_cast<ID3D11Texture2D*>(d3d11Resource);
  
 diff --git a/src/Core/TextureManager.h b/src/Core/TextureManager.h
-index f341ca1..c933fe8 100644
+index f341ca1..22de75b 100644
 --- a/src/Core/TextureManager.h
 +++ b/src/Core/TextureManager.h
 @@ -4,6 +4,8 @@
@@ -51,7 +122,7 @@ index f341ca1..c933fe8 100644
  struct TextureReference
  {
  	nvrhi::TextureHandle texture;
-@@ -30,6 +32,16 @@ struct TextureManager
+@@ -30,8 +32,20 @@ struct TextureManager
  	eastl::unique_ptr<BindlessTableManager> m_TextureDescriptors;
  	eastl::unique_ptr<BindlessTableManager> m_CubemapDescriptors;
  
@@ -67,7 +138,11 @@ index f341ca1..c933fe8 100644
 +
  	TextureManager();
  	uint64_t GetFakeDoubledVRAMUsage();
++	// RTLab VRAM log: number and size of the textures shared with DX12.
++	void RTLabTextureStats(size_t& a_count, uint64_t& a_bytes);
  	eastl::shared_ptr<DescriptorHandle> GetDescriptor(RE::BSGraphics::Texture* texture, TextureType textureType = TextureType::Standard);
+ 	void ReleaseTexture(RE::BSGraphics::Texture* texture);
+ };
 diff --git a/src/Renderer.cpp b/src/Renderer.cpp
 index fbb69d0..8ec0fc7 100644
 --- a/src/Renderer.cpp
@@ -109,10 +184,10 @@ index b338172..31f55f0 100644
  
  	inline auto GetPrevJitter() const { return m_PrevJitter; }
 diff --git a/src/Scene.cpp b/src/Scene.cpp
-index 7844daf..c2c3f5d 100644
+index 7844daf..ab78651 100644
 --- a/src/Scene.cpp
 +++ b/src/Scene.cpp
-@@ -36,6 +36,50 @@
+@@ -36,6 +36,130 @@
  #include "Pass/Raytracing/Common/TransformComposition.h"
  #include "Pass/Raytracing/Common/PTComposite.h"
  
@@ -125,6 +200,80 @@ index 7844daf..c2c3f5d 100644
 +	constexpr float kRTLabSpikeCpuMs = 8.0f;
 +	constexpr float kRTLabSpikeGpuWaitMs = 25.0f;
 +	constexpr auto kRTLabSpikeLogInterval = std::chrono::milliseconds(500);
++	constexpr auto kRTLabVramLogInterval = std::chrono::seconds(30);
++
++	// RTLab: the game's video memory as Windows reports it for this process, and the budget Windows grants.
++	// Read through the D3D11 device's adapter; no extra library. Returns false if it is unavailable.
++	bool RTLabQueryVram(uint64_t& a_usage, uint64_t& a_budget)
++	{
++		static winrt::com_ptr<IDXGIAdapter3> adapter;
++		static bool tried = false;
++		if (!tried) {
++			tried = true;
++			if (auto* device = Renderer::GetNativeD3D11Device()) {
++				winrt::com_ptr<IDXGIDevice> dxgiDevice;
++				winrt::com_ptr<IDXGIAdapter> baseAdapter;
++				if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(dxgiDevice.put()))) &&
++					SUCCEEDED(dxgiDevice->GetAdapter(baseAdapter.put())))
++					adapter = baseAdapter.try_as<IDXGIAdapter3>();
++			}
++		}
++		if (!adapter)
++			return false;
++
++		DXGI_QUERY_VIDEO_MEMORY_INFO info{};
++		if (FAILED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
++			return false;
++
++		a_usage = info.CurrentUsage;
++		a_budget = info.Budget;
++		return true;
++	}
++
++	constexpr uint64_t kRTLabMiB = 1024ull * 1024ull;
++
++	// Every kRTLabVramLogInterval: what Windows reports, and what the RT backend holds itself.
++	// Textures shared between DX11 and DX12 are counted twice in the process figure (CS subtracts
++	// them in its performance overlay too), so the line also gives that amount separately.
++	void LogRTLabVram(SceneGraph* a_sceneGraph)
++	{
++		using Clock = std::chrono::high_resolution_clock;
++		static Clock::time_point lastLog{};
++
++		const auto now = Clock::now();
++		if (now - lastLog < kRTLabVramLogInterval)
++			return;
++		lastLog = now;
++
++		uint64_t usage = 0;
++		uint64_t budget = 0;
++		const bool haveVram = RTLabQueryVram(usage, budget);
++
++		size_t textures = 0;
++		uint64_t textureBytes = 0;
++		a_sceneGraph->GetTextureManager()->RTLabTextureStats(textures, textureBytes);
++
++		const auto& clusters = a_sceneGraph->GetAllClusters();
++		size_t withBlas = 0;
++		uint64_t blasBytes = 0;
++		for (const auto* cluster : clusters) {
++			const uint64_t bytes = cluster->RTLabGetBLASBytes();
++			if (bytes) {
++				++withBlas;
++				blasBytes += bytes;
++			}
++		}
++
++		if (haveVram) {
++			logger::info(
++				"RTLab VRAM: process {} MB of budget {} MB (includes {} MB of shared textures counted twice) | RT: {} shared textures, {} clusters, {} BLAS = {} MB",
++				usage / kRTLabMiB, budget / kRTLabMiB, textureBytes / kRTLabMiB, textures, clusters.size(), withBlas, blasBytes / kRTLabMiB);
++		} else {
++			logger::info(
++				"RTLab VRAM: process figure unavailable | RT: {} shared textures = {} MB, {} clusters, {} BLAS = {} MB",
++				textures, textureBytes / kRTLabMiB, clusters.size(), withBlas, blasBytes / kRTLabMiB);
++		}
++	}
 +
 +	void LogRTLabFrameSpike(SceneGraph* a_sceneGraph, Renderer* a_renderer,
 +		std::chrono::high_resolution_clock::time_point a_frameStart,
@@ -150,20 +299,26 @@ index 7844daf..c2c3f5d 100644
 +		const float submitMs = std::chrono::duration<float, std::milli>(now - a_submitStart).count();
 +		const float passesMs = totalMs - waitMs - stats.updateMs - submitMs;
 +
++		uint64_t vramUsage = 0;
++		uint64_t vramBudget = 0;
++		RTLabQueryVram(vramUsage, vramBudget);
++
 +		logger::info(
 +			"RTLab frame spike {:.1f} ms (frame {}): GPU wait {:.1f} | scene update {:.1f} = traversal {:.1f} + mesh update {:.1f}"
 +			" + new meshes {:.1f} ({} created, {} deferred) + materials {:.1f} + clusters {:.1f}"
-+			" | passes {:.1f} incl. BLAS {:.1f} ({} dirty clusters) | textures shared {} in {:.1f} ms | submit {:.1f}",
++			" | passes {:.1f} incl. BLAS {:.1f} ({} clusters built, {} deferred) | textures shared {} in {:.1f} ms | submit {:.1f}"
++			" | VRAM {}/{} MB",
 +			totalMs, a_renderer->GetFrameIndex(), waitMs, stats.updateMs, stats.traversalMs, stats.parallelMs,
 +			stats.createMs, stats.created, stats.deferred, stats.materialMs, stats.clusterMs,
-+			passesMs, stats.buildClustersMs, stats.dirtyClusters, sharedTextures, shareMs, submitMs);
++			passesMs, stats.buildClustersMs, stats.dirtyClusters, stats.deferredClusters, sharedTextures, shareMs, submitMs,
++			vramUsage / kRTLabMiB, vramBudget / kRTLabMiB);
 +	}
 +}
 +
  Scene::Scene()
  {
  	m_SceneGraph = eastl::make_unique<SceneGraph>();
-@@ -191,6 +235,8 @@ void Scene::Execute()
+@@ -191,6 +315,8 @@ void Scene::Execute()
  	if (!m_Settings.Enabled || m_Settings.GeneralSettings.Mode == Mode::None)
  		return;
  
@@ -172,7 +327,7 @@ index 7844daf..c2c3f5d 100644
  	auto* sceneGraph = GetSceneGraph();
  
  	sceneGraph->UpdateCamera();
-@@ -238,7 +284,11 @@ void Scene::Execute()
+@@ -238,7 +364,12 @@ void Scene::Execute()
  		renderer->RenderTargetManager().CopySharedTextures(commandList, currentSlot);
  	}
  
@@ -181,14 +336,15 @@ index 7844daf..c2c3f5d 100644
  	renderer->EndExecution();
 +
 +	LogRTLabFrameSpike(sceneGraph, renderer, rtlabFrameStart, rtlabSubmitStart);
++	LogRTLabVram(sceneGraph);
  }
  
  void Scene::UpdateCameraData() const
 diff --git a/src/SceneGraph.cpp b/src/SceneGraph.cpp
-index 1f296e2..62a6b34 100644
+index 1f296e2..c386608 100644
 --- a/src/SceneGraph.cpp
 +++ b/src/SceneGraph.cpp
-@@ -21,9 +21,19 @@
+@@ -21,9 +21,26 @@
  #include "Core/Mesh/SubIndexSegmentMesh.h"
  #include "Core/ParallelTriShapeWalker.h"
  
@@ -203,12 +359,19 @@ index 1f296e2..62a6b34 100644
 +	// At least kRTLabMinCreatesPerFrame shapes are created every frame so the backlog always drains.
 +	constexpr float kRTLabCreateBudgetMs = 2.5f;
 +	constexpr size_t kRTLabMinCreatesPerFrame = 4;
++
++	// RTLab: BLAS cluster builds per frame. Clusters that must be built (removed or destroyed meshes,
++	// skinning, refits, the player) always are; the remaining budget goes to the nearest of the others.
++	// A cluster is never deferred for more than kRTLabMaxClusterDeferFrames frames in a row.
++	constexpr size_t kRTLabMaxClusterBuilds = 32;
++	constexpr size_t kRTLabMinDeferrableBuilds = 8;
++	constexpr uint16_t kRTLabMaxClusterDeferFrames = 30;
 +}
 +
  void SceneGraph::Initialize()
  {
  	const auto maxThreads = std::thread::hardware_concurrency() - 1u;
-@@ -394,6 +404,16 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -394,6 +411,16 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  	const auto updateStart = std::chrono::high_resolution_clock::now();
  	auto phaseStart = updateStart;
  
@@ -225,7 +388,20 @@ index 1f296e2..62a6b34 100644
  	UpdateLights(commandList);
  
  	const auto timings = Scene::GetSingleton()->m_Settings.DebugSettings.Timings == TimingMode::Extended;
-@@ -453,6 +473,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -422,8 +449,12 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 
+ 		auto* mesh = it->second.get();
+ 
++		// RTLab: every cluster whose last BLAS still holds this mesh has to be rebuilt this frame.
++		RTLabOnMeshDestroyed(mesh);
++
+ 		if (auto* cluster = mesh->GetCluster()) {
+ 			cluster->RemoveMember(mesh);
++			cluster->m_RTLabForceBuild = true;
+ 			MarkClusterDirty(cluster);
+ 		}
+ 
+@@ -453,6 +484,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  
  	const auto frameIndex = Renderer::GetSingleton()->GetFrameIndex();
  
@@ -234,7 +410,7 @@ index 1f296e2..62a6b34 100644
  	// Phase A: Parallel recursive traversal — collect into update/create lists, skip heavy processing.
  	//
  	// Replaces the previous serial walk + the (now-removed) Phase 0 FadeNode collection. Strategy:
-@@ -570,6 +592,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -570,6 +603,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		phaseStart = nowTp;
  	}
  
@@ -243,7 +419,15 @@ index 1f296e2..62a6b34 100644
  	// Phase B + C1 (parallel): Update known meshes AND filter new meshes via thread pool
  	{
  		const size_t numWorkers = std::max<size_t>(1, m_ThreadPool->GetThreadCount());
-@@ -722,8 +746,47 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -587,6 +622,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 				if (ownerChanged || !cluster) {
+ 					if (cluster) {
+ 						cluster->RemoveMember(mesh);
++						RTLabNoteRemoved(cluster, mesh);
+ 						MarkClusterDirty(cluster);
+ 					}
+ 
+@@ -722,8 +758,47 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		phaseStart = nowTp;
  	}
  
@@ -292,7 +476,7 @@ index 1f296e2..62a6b34 100644
  		if (auto created = BaseMesh::Create(bsTriShape, commandList)) {
  			created->SetOwner(refr);
  			auto [it2, inserted] = m_Meshes.emplace(bsTriShape, eastl::move(created));
-@@ -746,6 +809,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -746,6 +821,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		}
  	}
  
@@ -302,7 +486,15 @@ index 1f296e2..62a6b34 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseC2-Create", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -774,9 +840,13 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -759,6 +837,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 
+ 			if (auto* cluster = mesh->GetCluster()) {
+ 				cluster->RemoveMember(mesh);
++				RTLabNoteRemoved(cluster, mesh);
+ 				MarkClusterDirty(cluster);
+ 			}
+ 
+@@ -774,9 +853,13 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		phaseStart = nowTp;
  	}
  
@@ -316,7 +508,25 @@ index 1f296e2..62a6b34 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseE-MaterialFlush", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -894,6 +964,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -788,6 +871,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 		for (auto it = clusters.begin(); it != clusters.end(); ) {
+ 			if (it->second->Empty()) {
+ 				m_DirtyClusters.erase(it->second.get());
++				RTLabForgetCluster(it->second.get());
+ 				it = clusters.erase(it);
+ 			} else {
+ 				++it;
+@@ -798,6 +882,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+ 	removeEmptyClusters(m_OrphanClusters);
+ 	removeEmptyClusters(m_SubIndexSegmentClusters);
+ 
++	// RTLab: decide which dirty clusters are built this frame, before Phase G reads their geometry.
++	RTLabSelectClusterBuilds();
++
+ 	if (timings) {
+ 		const auto nowTp = std::chrono::high_resolution_clock::now();
+ 		m_UpdateTimings.push_back({"SG::PhaseF-DropClusters", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
+@@ -894,6 +981,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		}
  	}
  
@@ -325,7 +535,7 @@ index 1f296e2..62a6b34 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseG-ClusterUpdate", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -910,6 +982,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -910,6 +999,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  
  	m_MeshManager->Flush(commandList);
  
@@ -334,39 +544,164 @@ index 1f296e2..62a6b34 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::BufferWrites", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -1007,11 +1081,16 @@ void SceneGraph::MarkClusterDirty(BLASCluster* cluster)
+@@ -987,8 +1078,10 @@ BLASCluster* SceneGraph::GetOrCreateSegmentCluster(SubIndexSegmentMesh* segment,
+ 		std::unique_lock lock(m_SegmentClusterMutex);
+ 
+ 		auto [it, inserted] = m_SubIndexSegmentClusters.try_emplace(segment, nullptr);
+-		if (inserted)
++		if (inserted) {
+ 			it->second = eastl::make_unique<BLASCluster>(owner);
++			it->second->m_RTLabNeverDefer = true;
++		}
+ 
+ 		result = it->second.get();
+ 	}
+@@ -1007,11 +1100,34 @@ void SceneGraph::MarkClusterDirty(BLASCluster* cluster)
  
  void SceneGraph::BuildClusters(nvrhi::ICommandList* commandList)
  {
 +	const auto buildStart = std::chrono::high_resolution_clock::now();
-+	m_FrameStats.dirtyClusters = static_cast<uint32_t>(m_DirtyClusters.size());
++
++	// RTLab: clusters deferred by RTLabSelectClusterBuilds stay dirty for the next frame.
++	{
++		std::scoped_lock lock(m_ClusterDirtyMutex);
++		m_RTLabBuildList.clear();
++		for (auto* cluster : m_DirtyClusters)
++			m_RTLabBuildList.push_back(cluster);
++		m_DirtyClusters.clear();
++		for (auto* cluster : m_RTLabBuildList) {
++			if (cluster->m_RTLabBuildDeferred)
++				m_DirtyClusters.emplace(cluster);
++		}
++	}
 +
  	// Process only clusters that were marked dirty.
- 	for (auto* cluster : m_DirtyClusters)
+-	for (auto* cluster : m_DirtyClusters)
++	uint32_t built = 0;
++	for (auto* cluster : m_RTLabBuildList) {
++		if (cluster->m_RTLabBuildDeferred)
++			continue;
++
  		cluster->BuildUpdate(commandList, this);
 -	
-+
- 	m_DirtyClusters.clear();
+-	m_DirtyClusters.clear();
++		RTLabForgetCluster(cluster);  // its new BLAS no longer holds removed meshes
++		++built;
++	}
++	m_FrameStats.dirtyClusters = built;
 +
 +	m_FrameStats.buildClustersMs = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - buildStart).count();
  }
  
  void SceneGraph::ReleaseTexture(RE::BSGraphics::Texture* texture)
+@@ -1041,3 +1157,91 @@ void SceneGraph::WriteTransformData(uint32_t index, const float3x4& transform, c
+ {
+ 	m_MeshManager->WriteTransformData(index, transform, prevTransform);
+ }
++
++void SceneGraph::RTLabNoteRemoved(BLASCluster* cluster, BaseMesh* mesh)
++{
++	std::scoped_lock lock(m_RTLabStaleMutex);
++	m_RTLabStaleRefs.emplace(mesh, cluster);
++	cluster->m_RTLabStaleMembers.push_back(mesh);
++}
++
++void SceneGraph::RTLabOnMeshDestroyed(BaseMesh* mesh)
++{
++	std::scoped_lock lock(m_RTLabStaleMutex);
++	const auto [first, last] = m_RTLabStaleRefs.equal_range(mesh);
++	for (auto it = first; it != last; ++it)
++		it->second->m_RTLabForceBuild = true;
++}
++
++void SceneGraph::RTLabForgetCluster(BLASCluster* cluster)
++{
++	std::scoped_lock lock(m_RTLabStaleMutex);
++	for (auto* mesh : cluster->m_RTLabStaleMembers) {
++		const auto [first, last] = m_RTLabStaleRefs.equal_range(mesh);
++		for (auto it = first; it != last;) {
++			if (it->second == cluster)
++				it = m_RTLabStaleRefs.erase(it);
++			else
++				++it;
++		}
++	}
++	cluster->m_RTLabStaleMembers.clear();
++	cluster->m_RTLabForceBuild = false;
++	cluster->m_RTLabDeferredFrames = 0;
++	cluster->m_RTLabBuildDeferred = false;
++}
++
++void SceneGraph::RTLabSelectClusterBuilds()
++{
++	m_FrameStats.deferredClusters = 0;
++
++	// Nothing of the world is shown behind a loading screen, so the whole backlog is built there.
++	const bool noBudget = !Scene::GetSingleton()->GetMenuState().none(MenuState::LoadingMenu);
++	const auto eye = Util::Adapter::GetCameraEyePosition();
++
++	std::scoped_lock lock(m_ClusterDirtyMutex);
++
++	m_RTLabBuildOrder.clear();
++	size_t mandatory = 0;
++
++	for (auto* cluster : m_DirtyClusters) {
++		cluster->m_RTLabBuildDeferred = false;
++
++		// A hidden orphan is only dropped from the TLAS; BuildUpdate does no work for it.
++		if (!cluster->m_Owner && cluster->m_DirtyFlags == DirtyFlags::Visibility)
++			continue;
++
++		// Deferring keeps the last BLAS. That is only valid while every mesh in it is alive and
++		// unchanged in shape: no destroyed members, no refits (skinning, vertices, local transforms).
++		const bool deferrable = !noBudget &&
++		                        !cluster->m_RTLabNeverDefer &&
++		                        !cluster->m_RTLabForceBuild &&
++		                        !cluster->IsPlayer() &&
++		                        !cluster->m_DirtyFlags.any(DirtyFlags::Transform, DirtyFlags::Skin, DirtyFlags::Vertex) &&
++		                        cluster->m_RTLabDeferredFrames < kRTLabMaxClusterDeferFrames;
++		if (!deferrable) {
++			++mandatory;
++			continue;
++		}
++
++		const auto& center = cluster->m_Members.empty() ? cluster->m_WorldBound.center : cluster->m_Members.front()->GetWorldBound().center;
++		const float dx = center.x - eye.x;
++		const float dy = center.y - eye.y;
++		const float dz = center.z - eye.z;
++		m_RTLabBuildOrder.emplace_back(std::bit_cast<uint32_t>(dx * dx + dy * dy + dz * dz), cluster);
++	}
++
++	const size_t allowed = std::max(kRTLabMinDeferrableBuilds, kRTLabMaxClusterBuilds > mandatory ? kRTLabMaxClusterBuilds - mandatory : size_t{ 0 });
++	if (m_RTLabBuildOrder.size() <= allowed)
++		return;
++
++	std::sort(m_RTLabBuildOrder.begin(), m_RTLabBuildOrder.end(),
++		[](const auto& a_lhs, const auto& a_rhs) { return a_lhs.first < a_rhs.first; });
++
++	for (size_t orderIndex = allowed; orderIndex < m_RTLabBuildOrder.size(); ++orderIndex) {
++		auto* cluster = m_RTLabBuildOrder[orderIndex].second;
++		cluster->m_RTLabBuildDeferred = true;
++		++cluster->m_RTLabDeferredFrames;
++	}
++	m_FrameStats.deferredClusters = static_cast<uint32_t>(m_RTLabBuildOrder.size() - allowed);
++}
 diff --git a/src/SceneGraph.h b/src/SceneGraph.h
-index a54217b..f0d0e19 100644
+index a54217b..8d1dad4 100644
 --- a/src/SceneGraph.h
 +++ b/src/SceneGraph.h
-@@ -27,6 +27,9 @@
+@@ -27,6 +27,10 @@
  #include <eastl/vector_set.h>
  #include <eastl/unordered_set.h>
  
++#include <unordered_map>
 +#include <utility>
 +#include <vector>
 +
  #include "Types/PassTiming.h"
  
  #include <shared_mutex>
-@@ -205,7 +208,23 @@ public:
+@@ -205,7 +209,24 @@ public:
  	inline const auto& GetFirstPersonPosition() const { return m_FirstPersonPosition; }
  
  	inline const auto& GetUpdateTimings() const { return m_UpdateTimings; }
@@ -384,14 +719,15 @@ index a54217b..f0d0e19 100644
 +		float buildClustersMs = 0.0f;
 +		uint32_t created = 0;
 +		uint32_t deferred = 0;
-+		uint32_t dirtyClusters = 0;
++		uint32_t dirtyClusters = 0;      // BLAS clusters built this frame
++		uint32_t deferredClusters = 0;   // dirty BLAS clusters left for a later frame
 +	};
 +	inline const FrameStats& GetFrameStats() const { return m_FrameStats; }
 +
  	void OnDestroy(RE::BSTriShape* bsTriShape);
  
  	void UpdateDynamicData(RE::BSDynamicTriShape* bsDynamicTriShape);
-@@ -230,6 +249,11 @@ public:
+@@ -230,6 +251,23 @@ public:
  
  private:
  	eastl::vector<PassTiming> m_UpdateTimings;
@@ -400,6 +736,18 @@ index a54217b..f0d0e19 100644
 +	// std::sort over EASTL element types finds both std::swap and eastl::swap and does not compile.
 +	std::vector<std::pair<uint32_t, uint32_t>> m_CreateOrder;
 +	eastl::vector<MeshCreateCandidate> m_CreateScratch;
++
++	// RTLab: BLAS build budget. Meshes removed from a cluster stay in its last BLAS until it is rebuilt;
++	// m_RTLabStaleRefs maps them back to those clusters so a destroyed mesh forces their rebuild.
++	std::mutex m_RTLabStaleMutex;
++	std::unordered_multimap<BaseMesh*, BLASCluster*> m_RTLabStaleRefs;
++	std::vector<std::pair<uint32_t, BLASCluster*>> m_RTLabBuildOrder;
++	std::vector<BLASCluster*> m_RTLabBuildList;
++
++	void RTLabNoteRemoved(BLASCluster* cluster, BaseMesh* mesh);
++	void RTLabOnMeshDestroyed(BaseMesh* mesh);
++	void RTLabForgetCluster(BLASCluster* cluster);
++	void RTLabSelectClusterBuilds();
  
  	struct PendingDestroy
  	{

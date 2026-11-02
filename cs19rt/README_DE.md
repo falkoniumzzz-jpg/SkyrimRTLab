@@ -13,6 +13,10 @@ RT-DLL Creation Engine Raytracing (CER, `09350844`). Alles ist in
 - **Ergänzungen:** Codex' Patches aus dem bisherigen RT-Build (Hybrid-RTGI, ReSTIR,
   RR-Guides, ShadowLab-ABI) und der RR-Matrix-Fix.
 - **Streamline:** SDK 2.12 und die DLSS-RR-DLLs genau so, wie sie im RT-Zweig liegen.
+- **Vanilla Fresnel:** aus Open Shaders (alandtse/open-shaders, GPL-3.0-or-later,
+  „feat: vanilla fresnel“ #243) auf CS 1.9 portiert, ohne den Gras-Teil. Standardmäßig
+  aus. Mit RT wirkt es nur auf die Glanzlichter direkter Lichter, die Spiegelungen
+  liefert dann RT.
 
 ## Abweichungen vom alten RT-Build, bewusst
 

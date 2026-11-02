@@ -2,8 +2,8 @@
 
 Skyrim compiles these permutations on the user's machine; an error there silently breaks
 every affected material. This check builds the merged AIO shader tree and compiles the
-recorded Lighting pixel-shader permutations with and without RAYTRACING, plus grass and
-the deferred composite with the RT defines.
+recorded Lighting pixel-shader permutations with and without RAYTRACING (and with the
+ported VANILLA_FRESNEL define), plus grass and the deferred composite with the RT defines.
 """
 import argparse
 import os
@@ -42,6 +42,10 @@ def jobs_from_config(cs):
         for entry in ps["entries"]:
             defines = common + entry["defines"]
             jobs.append(("Lighting.hlsl", "ps_5_0", "main", defines + ["RAYTRACING"], defines))
+            # Vanilla Fresnel is always defined in this build (its shader define is unconditional).
+            jobs.append(("Lighting.hlsl", "ps_5_0", "main", defines + ["RAYTRACING", "VANILLA_FRESNEL"], defines + ["RAYTRACING"]))
+            if any(d in entry["defines"] for d in ("ENVMAP", "EYE", "MULTI_LAYER_PARALLAX", "TRUE_PBR", "SPECULAR")):
+                jobs.append(("Lighting.hlsl", "ps_5_0", "main", defines + ["VANILLA_FRESNEL"], defines))
     features = [d for d in common if d not in ("PSHADER", "VC", "CS_HAIR")]
     grass = [d for d in features if d not in ("TERRAIN_VARIATION", "EXTENDED_MATERIALS", "EXTENDED_TRANSLUCENCY")] + ["PSHADER", "GRASS_LIGHTING"]
     for extra in ([], ["DO_ALPHA_TEST"], ["TRUE_PBR"], ["TRUE_PBR", "DO_ALPHA_TEST"], ["RENDER_DEPTH"]):

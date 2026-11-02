@@ -47,6 +47,18 @@ sondern verteilt sie auf mehrere Frames, die nächsten zuerst.
 Längere Frames schreibt der Build selbst als „RTLab frame spike“ in
 `CreationEngineRaytracing.log`.
 
+Neu in diesem Build: Auch die BLAS-Neubauten sind begrenzt (höchstens 32 Objekte pro
+Frame, die nächsten zuerst). Ein Objekt, das gerade sichtbar oder unsichtbar wurde, kann
+im RT deshalb ein paar Frames lang noch im alten Zustand sein. Alle 30 Sekunden steht
+außerdem eine Zeile „RTLab VRAM“ im Log.
+
+## Vanilla Fresnel vergleichen (optional)
+
+Vanilla Fresnel ist standardmäßig aus. Zum Vergleichen im CS-Menü unter *Vanilla
+Fresnel* „Enable Vanilla Fresnel“ und „Enable Phong to GGX“ einschalten. Mit RT ändern
+sich nur die Glanzlichter von Sonne und Lampen auf normalen (nicht PBR) Materialien.
+Bitte erst nach dem Ruckel-Test einschalten.
+
 ## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
 
 1. Drücke **Strg+Umschalt+F12**, solange das Spiel hängt. Crash Logger schreibt dann

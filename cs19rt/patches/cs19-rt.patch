@@ -609,6 +609,17 @@ index e91736c..52af1ee 100644
  
  (v. December 9, 2020)
  
+diff --git a/features/Vanilla Fresnel/CORE b/features/Vanilla Fresnel/CORE
+new file mode 100644
+index 0000000..e69de29
+diff --git a/features/Vanilla Fresnel/Shaders/Features/VanillaFresnel.ini b/features/Vanilla Fresnel/Shaders/Features/VanillaFresnel.ini
+new file mode 100644
+index 0000000..000b60a
+--- /dev/null
++++ b/features/Vanilla Fresnel/Shaders/Features/VanillaFresnel.ini	
+@@ -0,0 +1,2 @@
++[Info]
++Version = 1-0-0
 diff --git a/include/CreationEngineRaytracing.h b/include/CreationEngineRaytracing.h
 new file mode 100644
 index 0000000..01376dd
@@ -1561,8 +1572,70 @@ index da5425b..c9602ba 100644
 +    "feature.upscaling.dlss_rr_model_preset_e": "预设 E",
 +    "feature.upscaling.frame_generation_unavailable": "帧生成在此系统上不可用。\n这需要 NVIDIA DLSS-G 或 AMD FSR 3.1 帧生成支持以及 D3D12 互操作。"
  }
+diff --git a/package/Shaders/Common/LightingEval.hlsli b/package/Shaders/Common/LightingEval.hlsli
+index 21748a0..abb0ff5 100644
+--- a/package/Shaders/Common/LightingEval.hlsli
++++ b/package/Shaders/Common/LightingEval.hlsli
+@@ -95,6 +95,27 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2
+ 	return lightColorMultiplier;
+ }
+ 
++#if defined(VANILLA_FRESNEL)
++float3 MicrofacetSpecular(DirectContext context, float3 F0, float roughness)
++{
++	const float3 N = context.worldNormal;
++	const float3 V = context.viewDir;
++	const float3 L = context.lightDir;
++	const float3 H = context.halfVector;
++
++	float NdotL = clamp(dot(N, L), EPSILON_DOT_CLAMP, 1);
++	float NdotV = saturate(abs(dot(N, V)) + EPSILON_DOT_CLAMP);
++	float NdotH = saturate(dot(N, H));
++	float VdotH = saturate(dot(V, H));
++
++	float D = BRDF::D_GGX(roughness, NdotH);
++	float G = BRDF::Vis_SmithJointApprox(roughness, NdotV, NdotL);
++	float3 F = BRDF::F_Schlick(F0, VdotH);
++
++	return D * G * F * NdotL;
++}
++#endif
++
+ void EvaluateLighting(DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv, float2 uv_ddx, float2 uv_ddy, out DirectLightingOutput lightingOutput)
+ {
+ 	lightingOutput = (DirectLightingOutput)0;
+@@ -145,6 +166,17 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
+ #	if defined(BACK_LIGHTING)
+ 	lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
+ #	endif
++
++#	if defined(VANILLA_FRESNEL)
++	if (SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGX) {
++		lightingOutput.specular = diffuseLightColor * MicrofacetSpecular(context, material.F0, material.Roughness) * Color::PBRLightingCompensation * Color::PBRLightingScale;
++
++		float2 specularBRDF = BRDF::EnvBRDF(material.Roughness, saturate(dot(context.worldNormal, context.viewDir)));
++		lightingOutput.specular *= 1 + material.F0 * (1 / (specularBRDF.x + specularBRDF.y) - 1);
++		return;
++	}
++#	endif
++
+ 	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
+ #endif
+ }
+diff --git a/package/Shaders/Common/Permutation.hlsli b/package/Shaders/Common/Permutation.hlsli
+index 4dd0105..84a1153 100644
+--- a/package/Shaders/Common/Permutation.hlsli
++++ b/package/Shaders/Common/Permutation.hlsli
+@@ -77,6 +77,7 @@ namespace Permutation
+ 		static const uint IsSun = (1 << 4);
+ 		static const uint SuppressExternalEmittance = (1 << 5);
+ 		static const uint AdditiveLighting = (1 << 6);
++		static const uint IsEye = (1 << 7);  // Vanilla Fresnel
+ 	}
+ 
+ 	namespace ExtraFeatureFlags
 diff --git a/package/Shaders/Common/SharedData.hlsli b/package/Shaders/Common/SharedData.hlsli
-index 8ae0643..a7d9818 100644
+index 8ae0643..7f807a1 100644
 --- a/package/Shaders/Common/SharedData.hlsli
 +++ b/package/Shaders/Common/SharedData.hlsli
 @@ -334,6 +334,16 @@ namespace SharedData
@@ -1582,14 +1655,41 @@ index 8ae0643..a7d9818 100644
  	struct TruePBRSettings
  	{
  		float VertexAOStrength;
-@@ -370,6 +380,7 @@ namespace SharedData
+@@ -351,6 +361,23 @@ namespace SharedData
+ 		float4 wetParams;
+ 	};
+ 
++	// Vanilla Fresnel (ported from Open Shaders). Must match VanillaFresnel::Settings.
++	struct VanillaFresnelSettings
++	{
++		uint Enable;
++		uint EnableGGX;
++		uint EnableGGXOnGrass;
++		uint EnableDynamicCubemapsConversion;
++		uint EnableEyeSpecialHandling;
++		float RoughnessMultiplier;
++		float SpecularRoughnessBlend;
++		float BaseF0Multiplier;
++		float MinF0;
++		float CubemapToF0Multiplier;
++		float ComplexMaterialF0Multiplier;
++		float pad;
++	};
++
+ 	cbuffer FeatureData : register(b6)
+ 	{
+ 		GrassLightingSettings grassLightingSettings;
+@@ -370,8 +397,10 @@ namespace SharedData
  		ENBSettings enbSettings;
  		TerrainBlendingSettings terrainBlendingSettings;
  		ExponentialHeightFogSettings exponentialHeightFogSettings;
 +		RaytracingSettings raytracingSettings;
  		TruePBRSettings truePBRSettings;
  		SkinData skinData;
++		VanillaFresnelSettings vanillaFresnelSettings;
  	};
+ 
+ 	Texture2D<float4> DepthTexture : register(t17);
 diff --git a/package/Shaders/DeferredCompositeCS.hlsl b/package/Shaders/DeferredCompositeCS.hlsl
 index c46430a..b000577 100644
 --- a/package/Shaders/DeferredCompositeCS.hlsl
@@ -1633,7 +1733,7 @@ index c46430a..b000577 100644
  
  	color = Color::IrradianceToGamma(color);
 diff --git a/package/Shaders/Lighting.hlsl b/package/Shaders/Lighting.hlsl
-index ab34912..eab6937 100644
+index ab34912..51315e9 100644
 --- a/package/Shaders/Lighting.hlsl
 +++ b/package/Shaders/Lighting.hlsl
 @@ -13,6 +13,8 @@
@@ -1660,7 +1760,17 @@ index ab34912..eab6937 100644
  	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
  
  #	if defined(SKINNED) || !defined(MODELSPACENORMALS)
-@@ -1817,6 +1827,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -1500,6 +1510,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 	shininess = lerp(shininess, shininess * complexMaterialColor.y, complexMaterial);
+ 	if (complexMaterial) {
+ 		complexSpecular = lerp(1.0, baseColor.xyz, complexMaterialColor.z);
++#		if defined(VANILLA_FRESNEL)
++		complexSpecular = saturate(complexSpecular * (SharedData::vanillaFresnelSettings.Enable ? SharedData::vanillaFresnelSettings.ComplexMaterialF0Multiplier : 1.0));
++#		endif
+ 		baseColor.xyz = lerp(baseColor.xyz, 0.0, complexMaterialColor.z);
+ 	}
+ #	endif  // defined (EMAT) && defined(ENVMAP)
+@@ -1817,6 +1830,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	Glints::PrecomputeGlints(glintNoise, uvOriginal, ddx(uvOriginal), ddy(uvOriginal), material.GlintScreenSpaceScale, material.GlintCache);
  #		endif
  
@@ -1671,11 +1781,17 @@ index ab34912..eab6937 100644
  	baseColor.xyz *= 1 - material.Metallic;
  
  	material.BaseColor = baseColor.xyz;
-@@ -1883,12 +1897,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -1883,12 +1900,22 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  		material.FuzzWeight = lerp(material.FuzzWeight, 0, projectedMaterialWeight);
  	}
  #		endif
 -#	else
++#		if defined(VANILLA_FRESNEL)
++	// Vanilla Fresnel only changes vanilla materials; these keep its shared code paths inert for PBR.
++	const bool enableVanillaFresnel = false;
++	const bool isEyeMaterial = false;
++	const float3 baseF0 = material.F0;
++#		endif
 +#	else  // TRUE_PBR
  	material.BaseColor = baseColor.xyz;
 -#		if defined(SPECULAR)
@@ -1690,7 +1806,36 @@ index ab34912..eab6937 100644
  #		else
  	material.Shininess = 0;
  	material.Glossiness = 0;
-@@ -1951,6 +1969,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -1900,7 +1927,27 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ #		if defined(BACK_LIGHTING)
+ 	material.backLightColor = backLightColor.xyz;
+ #		endif
+-#	endif  // TRUE_PBR
++
++#		if defined(VANILLA_FRESNEL)
++	const bool enableVanillaFresnel = SharedData::vanillaFresnelSettings.Enable;
++	const bool isEyeMaterial = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsEye) != 0;
++	material.F0 = enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0;
++#			if defined(SPECULAR)
++	if (enableVanillaFresnel && !isEyeMaterial) {
++		material.F0 = saturate(glossiness * SpecularColor.xyz / Math::PI);
++		float roughnessFromSpecular = (1.0 - glossiness) * (1.0 - glossiness);
++		float roughnessFromShininess = ShininessToRoughness(material.Shininess);
++		material.Roughness = lerp(roughnessFromShininess, roughnessFromSpecular, SharedData::vanillaFresnelSettings.SpecularRoughnessBlend * (1.0 - glossiness));
++	}
++#			endif
++	if (enableVanillaFresnel && isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
++		material.F0 = 0.027;
++		material.Roughness = 0.1;
++	}
++	material.F0 = max((enableVanillaFresnel ? SharedData::vanillaFresnelSettings.MinF0 : 0.0), material.F0 * SharedData::vanillaFresnelSettings.BaseF0Multiplier);
++	const float3 baseF0 = material.F0;
++#		endif  // VANILLA_FRESNEL
++#	endif      // TRUE_PBR
+ 
+ #	if defined(SKIN) && defined(CS_SKIN)
+ 	const float ExtraRoughness = BRDF::F_Schlick(0.04, saturate(dot(worldNormal.xyz, viewDirection))) * SharedData::skinData.fuzzParams.w;
+@@ -1951,6 +1998,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
  	float envMask = EnvmapData.x * MaterialData.x;
  
@@ -1701,7 +1846,95 @@ index ab34912..eab6937 100644
  	float viewNormalAngle = dot(worldNormal.xyz, viewDirection);
  	float3 envSamplingPoint = (viewNormalAngle * 2) * worldNormal.xyz - viewDirection;
  
-@@ -2024,7 +2046,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -1969,8 +2020,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 		uint2 envSize;
+ 		TexEnvSampler.GetDimensions(envSize.x, envSize.y);
+ 
+-#			if defined(EMAT)
++#			if defined(EMAT) && !defined(VANILLA_FRESNEL)
+ 		if (envSize.x == 1 && envSize.y == 1 || complexMaterial) {
++#			elif defined(VANILLA_FRESNEL)
++		bool vfStartDynamicCubemapTest = (enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion);
++#				if defined(EMAT)
++		vfStartDynamicCubemapTest = complexMaterial || vfStartDynamicCubemapTest;
++#				endif
++		if (vfStartDynamicCubemapTest || (envSize.x == 1 && envSize.y == 1)) {
+ #			else
+ 		if (envSize.x == 1 && envSize.y == 1) {
+ #			endif
+@@ -1992,15 +2049,30 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 			}
+ #			endif
+ 
++#			if defined(VANILLA_FRESNEL)
++			dynamicCubemap = dynamicCubemap || (SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion && enableVanillaFresnel);
++			const float originRoughness = material.Roughness;
++#			endif
++
+ 			if (dynamicCubemap) {
+ 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
++				bool usingDynamicCubemap = envColorBase.a < 1.0;
+ 
+-				if (envColorBase.a < 1.0) {
++				if (usingDynamicCubemap) {
+ 					material.F0 = Color::SkyrimGammaToLinear(envColorBase.rgb);
+ 					material.Roughness = envColorBase.a;
+ 				} else {
++#			if defined(VANILLA_FRESNEL)
++					if (enableVanillaFresnel) {
++						material.F0 = saturate(Color::SkyrimGammaToLinear(envColorBase.rgb) * Math::PI * SharedData::vanillaFresnelSettings.CubemapToF0Multiplier);
++					} else {
++						material.F0 = 1.0;
++						material.Roughness = 1.0 / 8.0;
++					}
++#			else
+ 					material.F0 = 1.0;
+ 					material.Roughness = 1.0 / 8.0;
++#			endif
+ 				}
+ 
+ #			if defined(CREATOR)
+@@ -2015,7 +2087,39 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 				material.Roughness = lerp(material.Roughness, complexMaterialRoughness, complexMaterial);
+ 				material.F0 = lerp(material.F0, complexSpecular, complexMaterial);
+ #			endif
++
++#			if defined(VANILLA_FRESNEL)
++				if (enableVanillaFresnel) {
++					envMask = saturate(envMask);
++#				if defined(SPECULAR)
++					material.F0 = max(lerp(baseF0, material.F0, envMask), SharedData::vanillaFresnelSettings.MinF0);
++#				else
++					material.F0 = max(lerp(0, material.F0, envMask), SharedData::vanillaFresnelSettings.MinF0);
++#				endif
++#				if defined(EMAT)
++					if (!complexMaterial) {
++#				endif
++						material.Roughness = lerp(originRoughness, material.Roughness, envMask);
++						if (!isEyeMaterial && !usingDynamicCubemap) {
++							material.F0 = saturate(material.F0 + envMask * material.BaseColor);
++							material.BaseColor = lerp(material.BaseColor, 0, envMask);
++						}
++#				if defined(EMAT)
++					}
++#				endif
++				}
++#			endif
++			}
++		}
++#		endif
++
++#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
++		if (enableVanillaFresnel) {
++			if (isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
++				material.F0 = 0.027;
++				material.Roughness = 0.1;
+ 			}
++			material.Roughness = clamp(material.Roughness * SharedData::vanillaFresnelSettings.RoughnessMultiplier, 0.04, 1.0);
+ 		}
+ #		endif
+ 
+@@ -2024,7 +2128,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  			envColor = envColorBase.xyz * envMask;
  		}
  	}
@@ -1709,7 +1942,7 @@ index ab34912..eab6937 100644
  #	endif  // defined (ENVMAP) || defined (MULTI_LAYER_PARALLAX) || defined(EYE)
  
  	float porosity = 1.0;
-@@ -2168,6 +2189,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2168,6 +2271,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  
  	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && (inWorld || inReflection) && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
  	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
@@ -1717,7 +1950,7 @@ index ab34912..eab6937 100644
  
  #	if defined(EXP_HEIGHT_FOG)
  	if (SharedData::exponentialHeightFogSettings.enabled) {
-@@ -2580,6 +2602,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2580,6 +2684,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	}
  #	endif
  
@@ -1728,7 +1961,40 @@ index ab34912..eab6937 100644
  #	if defined(LANDSCAPE)
  	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
  		input.Color.xyz = 1;
-@@ -2970,7 +2996,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2673,7 +2781,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ #		endif
+ #	endif
+ #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
+-	indirectLobeWeights.specular *= envMask;
++#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
++	if (!enableVanillaFresnel)
++#		endif
++		indirectLobeWeights.specular *= envMask;
+ #	endif
+ 
+ #	if defined(SPECULAR) && !defined(TRUE_PBR)
+@@ -2716,12 +2827,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ #		if defined(DYNAMIC_CUBEMAPS)
+ 	if (!dynamicCubemap)
+ #		endif
+-		specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
++#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
++		if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion))
++#		endif
++			specularColor += envColor * Color::IrradianceToLinear(diffuseColor);
+ 	indirectLobeWeights.diffuse += envColor;
+ #	endif
+ 
+ #	if defined(EMAT_ENVMAP)
+-	specularColor *= complexSpecular;
++#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
++	if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableGGX))
++#		endif
++		specularColor *= complexSpecular;
+ #	endif  // defined (EMAT) && defined(ENVMAP)
+ 
+ #	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
+@@ -2970,7 +3087,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  
  	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
  	psout.Specular = float4(specularColor, psout.Diffuse.w);
@@ -1741,7 +2007,7 @@ index ab34912..eab6937 100644
  
  #		if defined(WETNESS_EFFECTS)
  	indirectLobeWeights.specular += wetnessReflectance;
-@@ -2982,7 +3013,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2982,7 +3104,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		endif
  
  	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
@@ -1777,7 +2043,7 @@ index ab34912..eab6937 100644
  
  #		if defined(SNOW)
  #			if defined(TRUE_PBR)
-@@ -2992,7 +3050,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2992,7 +3141,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
  #			endif
  	psout.Parameters.w = psout.Diffuse.w;
@@ -1786,7 +2052,7 @@ index ab34912..eab6937 100644
  
  	float masksZ = Color::RGBToYCoCg(directionalAmbientColor).x;
  
-@@ -3002,13 +3060,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -3002,13 +3151,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
  #		endif
  
@@ -2582,7 +2848,7 @@ index f53d621..5a9c391 100644
  			defines.push_back({ "IBL", nullptr });
  
 diff --git a/src/Feature.cpp b/src/Feature.cpp
-index d9448a2..3cb0ecb 100644
+index d9448a2..1f768dc 100644
 --- a/src/Feature.cpp
 +++ b/src/Feature.cpp
 @@ -23,7 +23,9 @@
@@ -2595,7 +2861,23 @@ index d9448a2..3cb0ecb 100644
  #include "Features/ScreenSpaceGI.h"
  #include "Features/ScreenSpaceShadows.h"
  #include "Features/ScreenshotFeature.h"
-@@ -251,6 +253,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
+@@ -37,6 +39,7 @@
+ #include "Features/TerrainVariation.h"
+ #include "Features/UnifiedWater.h"
+ #include "Features/Upscaling.h"
++#include "Features/VanillaFresnel.h"
+ #include "Features/VolumetricLighting.h"
+ #include "Features/VolumetricShadows.h"
+ #include "Features/WaterEffects.h"
+@@ -240,6 +243,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
+ 		&globals::features::skySync,
+ 		&globals::features::terrainBlending,
+ 		&globals::features::terrainHelper,
++		&globals::features::vanillaFresnel,
+ 		&globals::features::volumetricLighting,
+ 		&globals::features::lodBlending,
+ 		&globals::features::inverseSquareLighting,
+@@ -251,6 +255,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
  		&globals::features::upscaling,
  		&globals::features::renderDoc,
  		&globals::features::remoteControl,
@@ -2605,10 +2887,10 @@ index d9448a2..3cb0ecb 100644
  		&globals::features::screenshotFeature,
  		&globals::features::linearLighting,
 diff --git a/src/FeatureBuffer.cpp b/src/FeatureBuffer.cpp
-index 73aac7c..f056088 100644
+index 73aac7c..c1ef579 100644
 --- a/src/FeatureBuffer.cpp
 +++ b/src/FeatureBuffer.cpp
-@@ -14,6 +14,7 @@
+@@ -14,11 +14,13 @@
  #include "Features/LODBlending.h"
  #include "Features/LightLimitFix.h"
  #include "Features/LinearLighting.h"
@@ -2616,15 +2898,23 @@ index 73aac7c..f056088 100644
  #include "Features/Skin.h"
  #include "Features/Skylighting.h"
  #include "Features/TerrainBlending.h"
-@@ -61,6 +62,7 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
+ #include "Features/TerrainShadows.h"
+ #include "Features/TerrainVariation.h"
++#include "Features/VanillaFresnel.h"
+ #include "Features/WetnessEffects.h"
+ #include "TruePBR.h"
+ 
+@@ -61,6 +63,8 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
  		globals::features::effects11.GetCommonBufferData(),
  		globals::features::terrainBlending.settings,
  		globals::features::exponentialHeightFog.GetCommonBufferData(),
 +		globals::features::raytracing.GetCommonBufferData(),
  		globals::features::truePBR.settings,
- 		globals::features::skin.GetCommonBufferData());
+-		globals::features::skin.GetCommonBufferData());
 -}
 \ No newline at end of file
++		globals::features::skin.GetCommonBufferData(),
++		globals::features::vanillaFresnel.settings);
 +}
 diff --git a/src/Features/CloudShadows.h b/src/Features/CloudShadows.h
 index fa870c3..a7ca1d9 100644
@@ -7420,8 +7710,203 @@ index 36c7587..c551f46 100644
  };
 +
 +DEFINE_ENUM_FLAG_OPERATORS(Streamline::Features);
+diff --git a/src/Features/VanillaFresnel.cpp b/src/Features/VanillaFresnel.cpp
+new file mode 100644
+index 0000000..60319f7
+--- /dev/null
++++ b/src/Features/VanillaFresnel.cpp
+@@ -0,0 +1,130 @@
++// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
++// "feat: vanilla fresnel" (#243), adapted to Community Shaders 1.9.
++
++#include "VanillaFresnel.h"
++
++#include "../I18n/I18n.h"
++#include "Features/Raytracing.h"
++#include "Globals.h"
++#include "ShaderCache.h"
++#include "State.h"
++
++#include <algorithm>
++#include <cctype>
++
++#define I18N_KEY_PREFIX "feature.vanilla_fresnel."
++
++NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
++	VanillaFresnel::Settings,
++	Enable,
++	EnableGGX,
++	EnableGGXOnGrass,
++	EnableDynamicCubemapsConversion,
++	EnableEyeSpecialHandling,
++	RoughnessMultiplier,
++	SpecularRoughnessBlend,
++	BaseF0Multiplier,
++	MinF0,
++	CubemapToF0Multiplier,
++	ComplexMaterialF0Multiplier)
++
++namespace
++{
++	constexpr auto IsEyeDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::IsEye);
++
++	bool ContainsEye(std::string_view a_name)
++	{
++		constexpr std::string_view eye = "eye";
++		return std::search(
++				   a_name.begin(), a_name.end(),
++				   eye.begin(), eye.end(),
++				   [](char a_lhs, char a_rhs) {
++					   return static_cast<char>(std::tolower(static_cast<unsigned char>(a_lhs))) == a_rhs;
++				   }) != a_name.end();
++	}
++
++	bool IsEyePass(const RE::BSLightingShader* a_shader, const RE::BSRenderPass* a_pass)
++	{
++		if (a_shader) {
++			const auto technique = static_cast<SIE::ShaderCache::LightingShaderTechniques>(0x3F & (a_shader->currentRawTechnique >> 24));
++			if (technique == SIE::ShaderCache::LightingShaderTechniques::Eye)
++				return true;
++		}
++
++		if (!a_pass || !a_pass->shaderProperty)
++			return false;
++
++		const auto* lightingProperty = a_pass->shaderProperty->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ?
++		                                   static_cast<const RE::BSLightingShaderProperty*>(a_pass->shaderProperty) :
++		                                   nullptr;
++		if (!lightingProperty || !lightingProperty->material)
++			return false;
++
++		const auto feature = lightingProperty->material->GetFeature();
++		if (feature == RE::BSShaderMaterial::Feature::kEye)
++			return true;
++
++		return feature == RE::BSShaderMaterial::Feature::kEnvironmentMap &&
++		       a_pass->geometry &&
++		       ContainsEye(a_pass->geometry->name.c_str());
++	}
++
++	struct BSLightingShader_SetupGeometry
++	{
++		static void thunk(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
++		{
++			auto& descriptor = globals::state->permutationData.ExtraShaderDescriptor;
++			descriptor &= ~IsEyeDescriptor;
++			if (IsEyePass(a_shader, a_pass))
++				descriptor |= IsEyeDescriptor;
++
++			func(a_shader, a_pass, a_renderFlags);
++		}
++		static inline REL::Relocation<decltype(thunk)> func;
++	};
++}
++
++void VanillaFresnel::PostPostLoad()
++{
++	stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
++	logger::info("[VanillaFresnel] Installed hooks - BSLightingShader_SetupGeometry");
++}
++
++void VanillaFresnel::RestoreDefaultSettings()
++{
++	settings = {};
++}
++
++void VanillaFresnel::LoadSettings(json& o_json)
++{
++	settings = o_json;
++}
++
++void VanillaFresnel::SaveSettings(json& o_json)
++{
++	o_json = settings;
++}
++
++void VanillaFresnel::DrawSettings()
++{
++	ImGui::Checkbox(T(TKEY("enable"), "Enable Vanilla Fresnel"), reinterpret_cast<bool*>(&settings.Enable));
++	ImGui::Checkbox(T(TKEY("enable_ggx"), "Enable Phong to GGX"), reinterpret_cast<bool*>(&settings.EnableGGX));
++	if (!settings.EnableGGX)
++		settings.EnableDynamicCubemapsConversion = false;
++	ImGui::BeginDisabled(!settings.EnableGGX);
++	ImGui::Checkbox(T(TKEY("enable_dynamic_cubemaps_conversion"), "Enable Auto Cubemaps Conversion"), reinterpret_cast<bool*>(&settings.EnableDynamicCubemapsConversion));
++	ImGui::EndDisabled();
++	ImGui::Checkbox(T(TKEY("enable_eye_special_handling"), "Enable Eye Special Handling"), reinterpret_cast<bool*>(&settings.EnableEyeSpecialHandling));
++
++	ImGui::SliderFloat(T(TKEY("roughness_multiplier"), "Roughness Multiplier"), &settings.RoughnessMultiplier, 0.0f, 10.0f, "%.2f");
++	ImGui::SliderFloat(T(TKEY("specular_roughness_blend"), "Specular Roughness Blend"), &settings.SpecularRoughnessBlend, 0.0f, 1.0f, "%.2f");
++	ImGui::SliderFloat(T(TKEY("base_f0_multiplier"), "Base F0 Multiplier"), &settings.BaseF0Multiplier, 0.0f, 10.0f, "%.2f");
++	ImGui::SliderFloat(T(TKEY("min_f0"), "Min F0"), &settings.MinF0, 0.0f, 0.04f, "%.3f");
++	ImGui::SliderFloat(T(TKEY("cubemap_to_f0_multiplier"), "Cubemap to F0 Multiplier"), &settings.CubemapToF0Multiplier, 0.0f, 10.0f, "%.2f");
++	ImGui::SliderFloat(T(TKEY("complex_material_f0_multiplier"), "Complex Material Env F0 Multiplier"), &settings.ComplexMaterialF0Multiplier, 0.0f, 10.0f, "%.2f");
++
++	if (globals::features::raytracing.loaded)
++		ImGui::TextWrapped("%s", T(TKEY("raytracing_note"), "With ray tracing active, reflections come from ray tracing; this feature then changes the direct-light highlights only."));
++}
++
++#undef I18N_KEY_PREFIX
+diff --git a/src/Features/VanillaFresnel.h b/src/Features/VanillaFresnel.h
+new file mode 100644
+index 0000000..eb06eae
+--- /dev/null
++++ b/src/Features/VanillaFresnel.h
+@@ -0,0 +1,53 @@
++#pragma once
++
++// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
++// "feat: vanilla fresnel" (#243). Grass GGX is not part of this port.
++
++#include "Buffer.h"
++
++struct VanillaFresnel : public Feature
++{
++	virtual inline std::string GetName() override { return "Vanilla Fresnel"; }
++	virtual std::string GetDisplayName() override { return T("feature.vanilla_fresnel.name", "Vanilla Fresnel"); }
++	virtual inline std::string GetShortName() override { return "VanillaFresnel"; }
++	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
++	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
++	{
++		return {
++			T("feature.vanilla_fresnel.description", "Add realistic environmental reflections to vanilla materials."),
++			{ T("feature.vanilla_fresnel.key_feature_1", "Add environmental reflections to all materials"),
++				T("feature.vanilla_fresnel.key_feature_2", "Supports vanilla and complex materials"),
++				T("feature.vanilla_fresnel.key_feature_3", "Optionally turn vanilla phong specular into GGX"),
++				T("feature.vanilla_fresnel.key_feature_4", "Optionally turn static cubemaps into dynamic reflections") }
++		};
++	}
++
++	virtual inline std::string_view GetShaderDefineName() override { return "VANILLA_FRESNEL"; }
++	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
++	virtual void PostPostLoad() override;
++
++	virtual void RestoreDefaultSettings() override;
++	virtual void LoadSettings(json& o_json) override;
++	virtual void SaveSettings(json& o_json) override;
++	virtual void DrawSettings() override;
++
++	// Layout mirrors SharedData::VanillaFresnelSettings. Off by default.
++	struct alignas(16) Settings
++	{
++		uint Enable = false;
++		uint EnableGGX = false;
++		uint EnableGGXOnGrass = false;  // kept for layout and settings compatibility; unused here
++		uint EnableDynamicCubemapsConversion = false;
++		uint EnableEyeSpecialHandling = true;
++		float RoughnessMultiplier = 1.0f;
++		float SpecularRoughnessBlend = 1.0f;
++		float BaseF0Multiplier = 0.32f;
++		float MinF0 = 0.02f;
++		float CubemapToF0Multiplier = 1.0f;
++		float ComplexMaterialF0Multiplier = 1.0f;
++		float pad = 0.0f;
++	};
++	STATIC_ASSERT_ALIGNAS_16(Settings);
++
++	Settings settings;
++};
 diff --git a/src/Globals.cpp b/src/Globals.cpp
-index 67642e5..f8b33cb 100644
+index 67642e5..4181245 100644
 --- a/src/Globals.cpp
 +++ b/src/Globals.cpp
 @@ -1,6 +1,8 @@
@@ -7443,7 +7928,11 @@ index 67642e5..f8b33cb 100644
  #include "Features/ScreenSpaceGI.h"
  #include "Features/ScreenSpaceShadows.h"
  #include "Features/ScreenshotFeature.h"
-@@ -38,7 +42,6 @@
+@@ -35,10 +39,10 @@
+ #include "Features/TerrainVariation.h"
+ #include "Features/UnifiedWater.h"
+ #include "Features/Upscaling.h"
++#include "Features/VanillaFresnel.h"
  #include "Features/VolumetricLighting.h"
  #include "Features/VolumetricShadows.h"
  #include "Features/WaterEffects.h"
@@ -7451,7 +7940,15 @@ index 67642e5..f8b33cb 100644
  #include "Features/WetnessEffects.h"
  #include "Menu.h"
  #include "SceneSettingsManager.h"
-@@ -97,6 +100,8 @@ namespace globals
+@@ -84,6 +88,7 @@ namespace globals
+ 		TerrainHelper terrainHelper{};
+ 		TerrainShadows terrainShadows{};
+ 		UnifiedWater unifiedWater{};
++		VanillaFresnel vanillaFresnel{};
+ 		VolumetricLighting volumetricLighting{};
+ 		WaterEffects waterEffects{};
+ 		PerformanceOverlay performanceOverlay{};
+@@ -97,6 +102,8 @@ namespace globals
  		ScreenshotFeature screenshotFeature{};
  		CSEditor csEditor{};
  		ExponentialHeightFog exponentialHeightFog{};
@@ -7460,7 +7957,7 @@ index 67642e5..f8b33cb 100644
  		TruePBR truePBR{};
  		Skin skin{};
  
-@@ -169,6 +174,7 @@ namespace globals
+@@ -169,6 +176,7 @@ namespace globals
  	SIE::ShaderCache* shaderCache = nullptr;
  	WeatherManager* weatherManager = nullptr;
  	SceneSettingsManager* sceneSettingsManager = nullptr;
@@ -7468,7 +7965,7 @@ index 67642e5..f8b33cb 100644
  
  	static Profiler profilerInstance;
  	Profiler* profiler = &profilerInstance;
-@@ -181,6 +187,7 @@ namespace globals
+@@ -181,6 +189,7 @@ namespace globals
  		deferred = Deferred::GetSingleton();
  		weatherManager = WeatherManager::GetSingleton();
  		sceneSettingsManager = SceneSettingsManager::GetSingleton();
@@ -7477,7 +7974,7 @@ index 67642e5..f8b33cb 100644
  
  	void ReInit()
 diff --git a/src/Globals.h b/src/Globals.h
-index 5a13a4a..a42e68c 100644
+index 5a13a4a..b679851 100644
 --- a/src/Globals.h
 +++ b/src/Globals.h
 @@ -3,6 +3,7 @@
@@ -7488,7 +7985,15 @@ index 5a13a4a..a42e68c 100644
  struct DynamicCubemaps;
  struct VolumetricShadows;
  struct ExtendedMaterials;
-@@ -36,6 +37,8 @@ struct Upscaling;
+@@ -27,6 +28,7 @@ struct TerrainBlending;
+ struct TerrainHelper;
+ struct TerrainShadows;
+ struct UnifiedWater;
++struct VanillaFresnel;
+ struct VolumetricLighting;
+ struct WaterEffects;
+ struct PerformanceOverlay;
+@@ -36,6 +38,8 @@ struct Upscaling;
  class Profiler;
  struct CSEditor;
  struct Effects11;
@@ -7497,7 +8002,15 @@ index 5a13a4a..a42e68c 100644
  struct ExponentialHeightFog;
  struct HDRDisplay;
  struct ScreenshotFeature;
-@@ -130,6 +133,8 @@ namespace globals
+@@ -117,6 +121,7 @@ namespace globals
+ 		extern TerrainHelper terrainHelper;
+ 		extern TerrainShadows terrainShadows;
+ 		extern UnifiedWater unifiedWater;
++		extern VanillaFresnel vanillaFresnel;
+ 		extern VolumetricLighting volumetricLighting;
+ 		extern WaterEffects waterEffects;
+ 		extern PerformanceOverlay performanceOverlay;
+@@ -130,6 +135,8 @@ namespace globals
  		extern ScreenshotFeature screenshotFeature;
  		extern CSEditor csEditor;
  		extern ExponentialHeightFog exponentialHeightFog;
@@ -7506,7 +8019,7 @@ index 5a13a4a..a42e68c 100644
  		extern TruePBR truePBR;
  		extern Skin skin;
  
-@@ -247,6 +252,7 @@ namespace globals
+@@ -247,6 +254,7 @@ namespace globals
  	extern Deferred* deferred;
  	extern Menu* menu;
  	extern SIE::ShaderCache* shaderCache;
@@ -7514,7 +8027,7 @@ index 5a13a4a..a42e68c 100644
  	extern Profiler* profiler;
  	extern WeatherManager* weatherManager;
  	extern SceneSettingsManager* sceneSettingsManager;
-@@ -264,4 +270,4 @@ namespace globals
+@@ -264,4 +272,4 @@ namespace globals
  	 * @param a_context The D3D11 device context to hook.
  	 */
  	void InstallD3DHooks(ID3D11DeviceContext* a_context);
@@ -7697,7 +8210,7 @@ index f5d81e8..4954481 100644
  
  	if (settings.contains("General") && settings["General"].is_object()) {
 diff --git a/src/State.h b/src/State.h
-index ce6841d..299abda 100644
+index ce6841d..9e7bdab 100644
 --- a/src/State.h
 +++ b/src/State.h
 @@ -207,6 +207,12 @@ public:
@@ -7713,6 +8226,16 @@ index ce6841d..299abda 100644
  	// Pass D3DCOMPILE_PARTIAL_PRECISION to fxc. With explicit min16float types this is
  	// mostly belt-and-braces in SM5, but it lets the compiler downgrade unmarked float
  	// ops to FP16 where it can prove safety. On by default; toggle off when reversing
+@@ -246,7 +252,8 @@ public:
+ 		GrassSphereNormal = 1 << 3,
+ 		IsSun = 1 << 4,
+ 		SuppressExternalEmittance = 1 << 5,
+-		AdditiveLighting = 1 << 6
++		AdditiveLighting = 1 << 6,
++		IsEye = 1 << 7  // Vanilla Fresnel
+ 	};
+ 
+ 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
 diff --git a/src/Utils/Game.cpp b/src/Utils/Game.cpp
 index 3b285fd..7adb524 100644
 --- a/src/Utils/Game.cpp
