@@ -185,7 +185,7 @@ index 7844daf..c2c3f5d 100644
  
  void Scene::UpdateCameraData() const
 diff --git a/src/SceneGraph.cpp b/src/SceneGraph.cpp
-index 1f296e2..bab53cf 100644
+index 1f296e2..62a6b34 100644
 --- a/src/SceneGraph.cpp
 +++ b/src/SceneGraph.cpp
 @@ -21,9 +21,19 @@
@@ -265,17 +265,17 @@ index 1f296e2..bab53cf 100644
 +		const auto eye = Util::Adapter::GetCameraEyePosition();
 +		m_CreateOrder.clear();
 +		m_CreateOrder.reserve(m_CreateCandidates.size());
-+		for (const auto& candidate : m_CreateCandidates) {
-+			const auto& position = candidate.bsTriShape->world.translate;
++		for (size_t candidateIndex = 0; candidateIndex < m_CreateCandidates.size(); ++candidateIndex) {
++			const auto& position = m_CreateCandidates[candidateIndex].bsTriShape->world.translate;
 +			const float dx = position.x - eye.x;
 +			const float dy = position.y - eye.y;
 +			const float dz = position.z - eye.z;
-+			m_CreateOrder.push_back(eastl::make_pair(std::bit_cast<uint32_t>(dx * dx + dy * dy + dz * dz), candidate));
++			m_CreateOrder.emplace_back(std::bit_cast<uint32_t>(dx * dx + dy * dy + dz * dz), static_cast<uint32_t>(candidateIndex));
 +		}
-+		std::sort(m_CreateOrder.begin(), m_CreateOrder.end(),
-+			[](const auto& a_lhs, const auto& a_rhs) { return a_lhs.first < a_rhs.first; });
++		std::sort(m_CreateOrder.begin(), m_CreateOrder.end());
++		m_CreateScratch.assign(m_CreateCandidates.begin(), m_CreateCandidates.end());
 +		for (size_t sortedIndex = 0; sortedIndex < m_CreateOrder.size(); ++sortedIndex)
-+			m_CreateCandidates[sortedIndex] = m_CreateOrder[sortedIndex].second;
++			m_CreateCandidates[sortedIndex] = m_CreateScratch[m_CreateOrder[sortedIndex].second];
 +	}
 +
 +	const auto createStart = std::chrono::high_resolution_clock::now();
@@ -353,10 +353,20 @@ index 1f296e2..bab53cf 100644
  
  void SceneGraph::ReleaseTexture(RE::BSGraphics::Texture* texture)
 diff --git a/src/SceneGraph.h b/src/SceneGraph.h
-index a54217b..372e2af 100644
+index a54217b..f0d0e19 100644
 --- a/src/SceneGraph.h
 +++ b/src/SceneGraph.h
-@@ -205,7 +205,23 @@ public:
+@@ -27,6 +27,9 @@
+ #include <eastl/vector_set.h>
+ #include <eastl/unordered_set.h>
+ 
++#include <utility>
++#include <vector>
++
+ #include "Types/PassTiming.h"
+ 
+ #include <shared_mutex>
+@@ -205,7 +208,23 @@ public:
  	inline const auto& GetFirstPersonPosition() const { return m_FirstPersonPosition; }
  
  	inline const auto& GetUpdateTimings() const { return m_UpdateTimings; }
@@ -381,12 +391,15 @@ index a54217b..372e2af 100644
  	void OnDestroy(RE::BSTriShape* bsTriShape);
  
  	void UpdateDynamicData(RE::BSDynamicTriShape* bsDynamicTriShape);
-@@ -230,6 +246,8 @@ public:
+@@ -230,6 +249,11 @@ public:
  
  private:
  	eastl::vector<PassTiming> m_UpdateTimings;
 +	FrameStats m_FrameStats;
-+	eastl::vector<eastl::pair<uint32_t, MeshCreateCandidate>> m_CreateOrder;  // RTLab: reused sort buffer for Phase C2
++	// RTLab: reused buffers for the nearest-first order in Phase C2. Plain std types on purpose:
++	// std::sort over EASTL element types finds both std::swap and eastl::swap and does not compile.
++	std::vector<std::pair<uint32_t, uint32_t>> m_CreateOrder;
++	eastl::vector<MeshCreateCandidate> m_CreateScratch;
  
  	struct PendingDestroy
  	{
