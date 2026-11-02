@@ -47,10 +47,16 @@ sondern verteilt sie auf mehrere Frames, die nächsten zuerst.
 Längere Frames schreibt der Build selbst als „RTLab frame spike“ in
 `CreationEngineRaytracing.log`.
 
-Neu in diesem Build: Auch die BLAS-Neubauten sind begrenzt (höchstens 32 Objekte pro
-Frame, die nächsten zuerst). Ein Objekt, das gerade sichtbar oder unsichtbar wurde, kann
-im RT deshalb ein paar Frames lang noch im alten Zustand sein. Alle 30 Sekunden steht
-außerdem eine Zeile „RTLab VRAM“ im Log.
+Auch die BLAS-Neubauten sind begrenzt: etwa 24 Objekte pro Frame, die am längsten
+wartenden und dann die nächsten zuerst. Bei großem Rückstand (nach einem Ladebildschirm)
+steigt die Zahl, damit er in rund einer Sekunde abgebaut ist statt in einem Rutsch. Neu
+geladene Objekte zählen dabei nicht mehr als „bewegt“ und fallen damit unter die Grenze.
+Ein Objekt, das gerade sichtbar oder unsichtbar wurde, kann im RT deshalb ein paar Frames
+lang noch im alten Zustand sein.
+
+Entladene Objekte werden über mehrere Frames freigegeben (höchstens 1,5 ms pro Frame),
+statt alle auf einmal. Die Spike-Zeile zeigt das als „meshes released“. Alle 30 Sekunden
+steht außerdem eine Zeile „RTLab VRAM“ im Log.
 
 ## Vanilla Fresnel vergleichen (optional)
 

@@ -25,7 +25,7 @@ index 08c4a86..fa6dc98 100644
  	m_IsValid = meshCount > 0;
  	if (m_IsValid) {
 diff --git a/src/Core/BLASCluster.h b/src/Core/BLASCluster.h
-index 3a46cfe..2c7a86d 100644
+index 3a46cfe..ac16d95 100644
 --- a/src/Core/BLASCluster.h
 +++ b/src/Core/BLASCluster.h
 @@ -75,6 +75,14 @@ class BLASCluster
@@ -36,7 +36,7 @@ index 3a46cfe..2c7a86d 100644
 +	// geometry, slots and BLAS of its last build until it is built again, so the TLAS stays consistent.
 +	bool m_RTLabBuildDeferred = false;
 +	bool m_RTLabNeverDefer = false;     // sub-index segment clusters: their meshes are freed without a GPU fence
-+	bool m_RTLabForceBuild = false;     // a mesh destroyed since the last build is still referenced by it
++	bool m_RTLabForceBuild = false;     // reserved: build this cluster this frame regardless of the budget
 +	uint16_t m_RTLabDeferredFrames = 0;
 +	eastl::vector<BaseMesh*> m_RTLabStaleMembers;  // removed since the last build, still in the last BLAS
 +
@@ -184,10 +184,10 @@ index b338172..31f55f0 100644
  
  	inline auto GetPrevJitter() const { return m_PrevJitter; }
 diff --git a/src/Scene.cpp b/src/Scene.cpp
-index 7844daf..ab78651 100644
+index 7844daf..2cf4f64 100644
 --- a/src/Scene.cpp
 +++ b/src/Scene.cpp
-@@ -36,6 +36,130 @@
+@@ -36,6 +36,132 @@
  #include "Pass/Raytracing/Common/TransformComposition.h"
  #include "Pass/Raytracing/Common/PTComposite.h"
  
@@ -296,8 +296,9 @@ index 7844daf..ab78651 100644
 +		lastLog = now;
 +
 +		const auto& stats = a_sceneGraph->GetFrameStats();
++		const auto& destroyStats = a_sceneGraph->GetDestroyStats();
 +		const float submitMs = std::chrono::duration<float, std::milli>(now - a_submitStart).count();
-+		const float passesMs = totalMs - waitMs - stats.updateMs - submitMs;
++		const float passesMs = totalMs - waitMs - stats.updateMs - submitMs - destroyStats.ms;
 +
 +		uint64_t vramUsage = 0;
 +		uint64_t vramBudget = 0;
@@ -307,10 +308,11 @@ index 7844daf..ab78651 100644
 +			"RTLab frame spike {:.1f} ms (frame {}): GPU wait {:.1f} | scene update {:.1f} = traversal {:.1f} + mesh update {:.1f}"
 +			" + new meshes {:.1f} ({} created, {} deferred) + materials {:.1f} + clusters {:.1f}"
 +			" | passes {:.1f} incl. BLAS {:.1f} ({} clusters built, {} deferred) | textures shared {} in {:.1f} ms | submit {:.1f}"
-+			" | VRAM {}/{} MB",
++			" | meshes released {} in {:.1f} ms ({} waiting) | VRAM {}/{} MB",
 +			totalMs, a_renderer->GetFrameIndex(), waitMs, stats.updateMs, stats.traversalMs, stats.parallelMs,
 +			stats.createMs, stats.created, stats.deferred, stats.materialMs, stats.clusterMs,
 +			passesMs, stats.buildClustersMs, stats.dirtyClusters, stats.deferredClusters, sharedTextures, shareMs, submitMs,
++			destroyStats.destroyed, destroyStats.ms, destroyStats.pending,
 +			vramUsage / kRTLabMiB, vramBudget / kRTLabMiB);
 +	}
 +}
@@ -318,7 +320,7 @@ index 7844daf..ab78651 100644
  Scene::Scene()
  {
  	m_SceneGraph = eastl::make_unique<SceneGraph>();
-@@ -191,6 +315,8 @@ void Scene::Execute()
+@@ -191,6 +317,8 @@ void Scene::Execute()
  	if (!m_Settings.Enabled || m_Settings.GeneralSettings.Mode == Mode::None)
  		return;
  
@@ -327,7 +329,7 @@ index 7844daf..ab78651 100644
  	auto* sceneGraph = GetSceneGraph();
  
  	sceneGraph->UpdateCamera();
-@@ -238,7 +364,12 @@ void Scene::Execute()
+@@ -238,7 +366,12 @@ void Scene::Execute()
  		renderer->RenderTargetManager().CopySharedTextures(commandList, currentSlot);
  	}
  
@@ -341,10 +343,10 @@ index 7844daf..ab78651 100644
  
  void Scene::UpdateCameraData() const
 diff --git a/src/SceneGraph.cpp b/src/SceneGraph.cpp
-index 1f296e2..c386608 100644
+index 1f296e2..7332631 100644
 --- a/src/SceneGraph.cpp
 +++ b/src/SceneGraph.cpp
-@@ -21,9 +21,26 @@
+@@ -21,9 +21,32 @@
  #include "Core/Mesh/SubIndexSegmentMesh.h"
  #include "Core/ParallelTriShapeWalker.h"
  
@@ -360,18 +362,24 @@ index 1f296e2..c386608 100644
 +	constexpr float kRTLabCreateBudgetMs = 2.5f;
 +	constexpr size_t kRTLabMinCreatesPerFrame = 4;
 +
-+	// RTLab: BLAS cluster builds per frame. Clusters that must be built (removed or destroyed meshes,
-+	// skinning, refits, the player) always are; the remaining budget goes to the nearest of the others.
-+	// A cluster is never deferred for more than kRTLabMaxClusterDeferFrames frames in a row.
-+	constexpr size_t kRTLabMaxClusterBuilds = 32;
++	// RTLab: BLAS cluster builds per frame. Clusters that must be built (refits for skinning, vertex or
++	// transform changes, the player, sub-index segments) always are; the remaining budget goes to the
++	// others, those waiting longer than kRTLabClusterAgeFrames first, then the nearest. A large backlog
++	// raises the budget so it drains within about kRTLabBacklogFrames frames instead of in one burst.
++	constexpr size_t kRTLabMaxClusterBuilds = 24;
 +	constexpr size_t kRTLabMinDeferrableBuilds = 8;
-+	constexpr uint16_t kRTLabMaxClusterDeferFrames = 30;
++	constexpr size_t kRTLabBacklogFrames = 60;
++	constexpr uint16_t kRTLabClusterAgeFrames = 30;
++
++	// RTLab: time per frame for releasing destroyed meshes (at least kRTLabMinDestroysPerFrame).
++	constexpr float kRTLabDestroyBudgetMs = 1.5f;
++	constexpr uint32_t kRTLabMinDestroysPerFrame = 8;
 +}
 +
  void SceneGraph::Initialize()
  {
  	const auto maxThreads = std::thread::hardware_concurrency() - 1u;
-@@ -394,6 +411,16 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -394,6 +417,16 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  	const auto updateStart = std::chrono::high_resolution_clock::now();
  	auto phaseStart = updateStart;
  
@@ -388,20 +396,19 @@ index 1f296e2..c386608 100644
  	UpdateLights(commandList);
  
  	const auto timings = Scene::GetSingleton()->m_Settings.DebugSettings.Timings == TimingMode::Extended;
-@@ -422,8 +449,12 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -422,8 +455,11 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  
  		auto* mesh = it->second.get();
  
-+		// RTLab: every cluster whose last BLAS still holds this mesh has to be rebuilt this frame.
-+		RTLabOnMeshDestroyed(mesh);
-+
++		// RTLab: the cluster may keep its last BLAS (with this mesh) for a few frames under the build
++		// budget. ProcessPendingMeshDestroys keeps the mesh alive until no such BLAS is left.
  		if (auto* cluster = mesh->GetCluster()) {
  			cluster->RemoveMember(mesh);
-+			cluster->m_RTLabForceBuild = true;
++			RTLabNoteRemoved(cluster, mesh);
  			MarkClusterDirty(cluster);
  		}
  
-@@ -453,6 +484,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -453,6 +489,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  
  	const auto frameIndex = Renderer::GetSingleton()->GetFrameIndex();
  
@@ -410,7 +417,7 @@ index 1f296e2..c386608 100644
  	// Phase A: Parallel recursive traversal — collect into update/create lists, skip heavy processing.
  	//
  	// Replaces the previous serial walk + the (now-removed) Phase 0 FadeNode collection. Strategy:
-@@ -570,6 +603,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -570,6 +608,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		phaseStart = nowTp;
  	}
  
@@ -419,7 +426,7 @@ index 1f296e2..c386608 100644
  	// Phase B + C1 (parallel): Update known meshes AND filter new meshes via thread pool
  	{
  		const size_t numWorkers = std::max<size_t>(1, m_ThreadPool->GetThreadCount());
-@@ -587,6 +622,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -587,6 +627,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  				if (ownerChanged || !cluster) {
  					if (cluster) {
  						cluster->RemoveMember(mesh);
@@ -427,7 +434,7 @@ index 1f296e2..c386608 100644
  						MarkClusterDirty(cluster);
  					}
  
-@@ -722,8 +758,47 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -722,8 +763,47 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		phaseStart = nowTp;
  	}
  
@@ -476,7 +483,7 @@ index 1f296e2..c386608 100644
  		if (auto created = BaseMesh::Create(bsTriShape, commandList)) {
  			created->SetOwner(refr);
  			auto [it2, inserted] = m_Meshes.emplace(bsTriShape, eastl::move(created));
-@@ -746,6 +821,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -746,6 +826,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		}
  	}
  
@@ -486,7 +493,7 @@ index 1f296e2..c386608 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseC2-Create", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -759,6 +837,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -759,6 +842,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  
  			if (auto* cluster = mesh->GetCluster()) {
  				cluster->RemoveMember(mesh);
@@ -494,7 +501,7 @@ index 1f296e2..c386608 100644
  				MarkClusterDirty(cluster);
  			}
  
-@@ -774,9 +853,13 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -774,9 +858,13 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		phaseStart = nowTp;
  	}
  
@@ -508,7 +515,7 @@ index 1f296e2..c386608 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseE-MaterialFlush", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -788,6 +871,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -788,6 +876,7 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		for (auto it = clusters.begin(); it != clusters.end(); ) {
  			if (it->second->Empty()) {
  				m_DirtyClusters.erase(it->second.get());
@@ -516,7 +523,7 @@ index 1f296e2..c386608 100644
  				it = clusters.erase(it);
  			} else {
  				++it;
-@@ -798,6 +882,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -798,6 +887,9 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  	removeEmptyClusters(m_OrphanClusters);
  	removeEmptyClusters(m_SubIndexSegmentClusters);
  
@@ -526,7 +533,7 @@ index 1f296e2..c386608 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseF-DropClusters", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -894,6 +981,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -894,6 +986,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  		}
  	}
  
@@ -535,7 +542,7 @@ index 1f296e2..c386608 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::PhaseG-ClusterUpdate", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -910,6 +999,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
+@@ -910,6 +1004,8 @@ void SceneGraph::Update(nvrhi::ICommandList* commandList)
  
  	m_MeshManager->Flush(commandList);
  
@@ -544,7 +551,7 @@ index 1f296e2..c386608 100644
  	if (timings) {
  		const auto nowTp = std::chrono::high_resolution_clock::now();
  		m_UpdateTimings.push_back({"SG::BufferWrites", 0.0f, std::chrono::duration<float, std::milli>(nowTp - phaseStart).count()});
-@@ -987,8 +1078,10 @@ BLASCluster* SceneGraph::GetOrCreateSegmentCluster(SubIndexSegmentMesh* segment,
+@@ -987,8 +1083,10 @@ BLASCluster* SceneGraph::GetOrCreateSegmentCluster(SubIndexSegmentMesh* segment,
  		std::unique_lock lock(m_SegmentClusterMutex);
  
  		auto [it, inserted] = m_SubIndexSegmentClusters.try_emplace(segment, nullptr);
@@ -556,7 +563,7 @@ index 1f296e2..c386608 100644
  
  		result = it->second.get();
  	}
-@@ -1007,11 +1100,34 @@ void SceneGraph::MarkClusterDirty(BLASCluster* cluster)
+@@ -1007,11 +1105,34 @@ void SceneGraph::MarkClusterDirty(BLASCluster* cluster)
  
  void SceneGraph::BuildClusters(nvrhi::ICommandList* commandList)
  {
@@ -594,7 +601,58 @@ index 1f296e2..c386608 100644
  }
  
  void SceneGraph::ReleaseTexture(RE::BSGraphics::Texture* texture)
-@@ -1041,3 +1157,91 @@ void SceneGraph::WriteTransformData(uint32_t index, const float3x4& transform, c
+@@ -1021,10 +1142,49 @@ void SceneGraph::ReleaseTexture(RE::BSGraphics::Texture* texture)
+ 
+ void SceneGraph::ProcessPendingMeshDestroys(uint64_t completedFence)
+ {
++	// RTLab: releasing a mesh frees its DX12 resources and descriptors, which is slow. A whole cell
++	// unloading at once took up to 0.9 s in one frame, so at most kRTLabDestroyBudgetMs is spent here
++	// per frame (the rest waits). A mesh still held by a cluster's last BLAS is kept, and its fence
++	// moves along with the frames that still use that BLAS.
++	using Clock = std::chrono::high_resolution_clock;
++	const auto start = Clock::now();
++	const bool noBudget = !Scene::GetSingleton()->GetMenuState().none(MenuState::LoadingMenu);
++	const uint64_t lastSubmitted = Renderer::GetSingleton()->GetLastSubmittedFence();
++
++	uint32_t destroyed = 0;
++	for (auto& pending : m_PendingMeshDestroy) {
++		if (!pending.mesh)
++			continue;
++
++		bool stillReferenced = false;
++		{
++			std::scoped_lock lock(m_RTLabStaleMutex);
++			stillReferenced = m_RTLabStaleRefs.contains(pending.mesh.get());
++		}
++		if (stillReferenced) {
++			pending.fenceValue = std::max(pending.fenceValue, lastSubmitted);
++			continue;
++		}
++
++		if (pending.fenceValue > completedFence)
++			continue;
++
++		if (!noBudget && destroyed >= kRTLabMinDestroysPerFrame &&
++			std::chrono::duration<float, std::milli>(Clock::now() - start).count() >= kRTLabDestroyBudgetMs)
++			break;
++
++		pending.mesh.reset();
++		++destroyed;
++	}
++
+ 	m_PendingMeshDestroy.erase(
+ 		eastl::remove_if(m_PendingMeshDestroy.begin(), m_PendingMeshDestroy.end(),
+-			[completedFence](const PendingDestroy& p) { return p.fenceValue <= completedFence; }),
++			[](const PendingDestroy& p) { return !p.mesh; }),
+ 		m_PendingMeshDestroy.end());
++
++	m_RTLabDestroyStats.destroyed = destroyed;
++	m_RTLabDestroyStats.pending = static_cast<uint32_t>(m_PendingMeshDestroy.size());
++	m_RTLabDestroyStats.ms = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+ }
+ 
+ uint32_t SceneGraph::AllocateMeshIndex()
+@@ -1041,3 +1201,85 @@ void SceneGraph::WriteTransformData(uint32_t index, const float3x4& transform, c
  {
  	m_MeshManager->WriteTransformData(index, transform, prevTransform);
  }
@@ -604,14 +662,6 @@ index 1f296e2..c386608 100644
 +	std::scoped_lock lock(m_RTLabStaleMutex);
 +	m_RTLabStaleRefs.emplace(mesh, cluster);
 +	cluster->m_RTLabStaleMembers.push_back(mesh);
-+}
-+
-+void SceneGraph::RTLabOnMeshDestroyed(BaseMesh* mesh)
-+{
-+	std::scoped_lock lock(m_RTLabStaleMutex);
-+	const auto [first, last] = m_RTLabStaleRefs.equal_range(mesh);
-+	for (auto it = first; it != last; ++it)
-+		it->second->m_RTLabForceBuild = true;
 +}
 +
 +void SceneGraph::RTLabForgetCluster(BLASCluster* cluster)
@@ -658,8 +708,7 @@ index 1f296e2..c386608 100644
 +		                        !cluster->m_RTLabNeverDefer &&
 +		                        !cluster->m_RTLabForceBuild &&
 +		                        !cluster->IsPlayer() &&
-+		                        !cluster->m_DirtyFlags.any(DirtyFlags::Transform, DirtyFlags::Skin, DirtyFlags::Vertex) &&
-+		                        cluster->m_RTLabDeferredFrames < kRTLabMaxClusterDeferFrames;
++		                        !cluster->m_DirtyFlags.any(DirtyFlags::Transform, DirtyFlags::Skin, DirtyFlags::Vertex);
 +		if (!deferrable) {
 +			++mandatory;
 +			continue;
@@ -669,10 +718,12 @@ index 1f296e2..c386608 100644
 +		const float dx = center.x - eye.x;
 +		const float dy = center.y - eye.y;
 +		const float dz = center.z - eye.z;
-+		m_RTLabBuildOrder.emplace_back(std::bit_cast<uint32_t>(dx * dx + dy * dy + dz * dz), cluster);
++		const uint64_t waitedLong = cluster->m_RTLabDeferredFrames >= kRTLabClusterAgeFrames ? 0u : 1u;
++		m_RTLabBuildOrder.emplace_back((waitedLong << 32) | std::bit_cast<uint32_t>(dx * dx + dy * dy + dz * dz), cluster);
 +	}
 +
-+	const size_t allowed = std::max(kRTLabMinDeferrableBuilds, kRTLabMaxClusterBuilds > mandatory ? kRTLabMaxClusterBuilds - mandatory : size_t{ 0 });
++	const size_t budget = std::max(kRTLabMaxClusterBuilds, m_RTLabBuildOrder.size() / kRTLabBacklogFrames);
++	const size_t allowed = std::max(kRTLabMinDeferrableBuilds, budget > mandatory ? budget - mandatory : size_t{ 0 });
 +	if (m_RTLabBuildOrder.size() <= allowed)
 +		return;
 +
@@ -682,12 +733,13 @@ index 1f296e2..c386608 100644
 +	for (size_t orderIndex = allowed; orderIndex < m_RTLabBuildOrder.size(); ++orderIndex) {
 +		auto* cluster = m_RTLabBuildOrder[orderIndex].second;
 +		cluster->m_RTLabBuildDeferred = true;
-+		++cluster->m_RTLabDeferredFrames;
++		if (cluster->m_RTLabDeferredFrames < UINT16_MAX)
++			++cluster->m_RTLabDeferredFrames;
 +	}
 +	m_FrameStats.deferredClusters = static_cast<uint32_t>(m_RTLabBuildOrder.size() - allowed);
 +}
 diff --git a/src/SceneGraph.h b/src/SceneGraph.h
-index a54217b..8d1dad4 100644
+index a54217b..453f8bb 100644
 --- a/src/SceneGraph.h
 +++ b/src/SceneGraph.h
 @@ -27,6 +27,10 @@
@@ -701,7 +753,7 @@ index a54217b..8d1dad4 100644
  #include "Types/PassTiming.h"
  
  #include <shared_mutex>
-@@ -205,7 +209,24 @@ public:
+@@ -205,7 +209,33 @@ public:
  	inline const auto& GetFirstPersonPosition() const { return m_FirstPersonPosition; }
  
  	inline const auto& GetUpdateTimings() const { return m_UpdateTimings; }
@@ -724,10 +776,19 @@ index a54217b..8d1dad4 100644
 +	};
 +	inline const FrameStats& GetFrameStats() const { return m_FrameStats; }
 +
++	// RTLab: released meshes, measured in ProcessPendingMeshDestroys (runs before Update each frame).
++	struct DestroyStats
++	{
++		uint32_t destroyed = 0;
++		uint32_t pending = 0;
++		float ms = 0.0f;
++	};
++	inline const DestroyStats& GetDestroyStats() const { return m_RTLabDestroyStats; }
++
  	void OnDestroy(RE::BSTriShape* bsTriShape);
  
  	void UpdateDynamicData(RE::BSDynamicTriShape* bsDynamicTriShape);
-@@ -230,6 +251,23 @@ public:
+@@ -230,6 +260,23 @@ public:
  
  private:
  	eastl::vector<PassTiming> m_UpdateTimings;
@@ -741,11 +802,11 @@ index a54217b..8d1dad4 100644
 +	// m_RTLabStaleRefs maps them back to those clusters so a destroyed mesh forces their rebuild.
 +	std::mutex m_RTLabStaleMutex;
 +	std::unordered_multimap<BaseMesh*, BLASCluster*> m_RTLabStaleRefs;
-+	std::vector<std::pair<uint32_t, BLASCluster*>> m_RTLabBuildOrder;
++	std::vector<std::pair<uint64_t, BLASCluster*>> m_RTLabBuildOrder;
 +	std::vector<BLASCluster*> m_RTLabBuildList;
++	DestroyStats m_RTLabDestroyStats;
 +
 +	void RTLabNoteRemoved(BLASCluster* cluster, BaseMesh* mesh);
-+	void RTLabOnMeshDestroyed(BaseMesh* mesh);
 +	void RTLabForgetCluster(BLASCluster* cluster);
 +	void RTLabSelectClusterBuilds();
  

@@ -1,5 +1,5 @@
 diff --git a/src/Core/Mesh/BaseMesh.cpp b/src/Core/Mesh/BaseMesh.cpp
-index 9644032..e45a336 100644
+index 9644032..2ff3241 100644
 --- a/src/Core/Mesh/BaseMesh.cpp
 +++ b/src/Core/Mesh/BaseMesh.cpp
 @@ -96,6 +96,13 @@ BaseMesh::BufferDescriptor BaseMesh::CreateIndexBuffer(RE::BSGraphics::TriShape*
@@ -29,3 +29,19 @@ index 9644032..e45a336 100644
  	auto vertexDesc = vertexBufferDX12->GetDesc();
  
  	D3D11_BUFFER_DESC vertexDesc11;
+@@ -207,11 +220,10 @@ void BaseMesh::Update([[ maybe_unused ]] nvrhi::ICommandList* commandList)
+ 		float3x4 transform;
+ 		XMStoreFloat3x4(&transform, Util::Math::GetXMFromNiTransform(m_World));
+ 
+-		if (m_NeedsPrevInit)
+-			MarkDirty(DirtyFlags::Transform);
+-		else if (!Util::Math::MatrixNearEqual(transform, m_Transform))
+-			MarkDirty(DirtyFlags::Transform);
+-		else if (!Util::Math::MatrixNearEqual(m_Transform, m_PrevTransform))
++		// RTLab: a new mesh was just added to its cluster, which rebuilds for that anyway. Marking it
++		// as moved as well would make the build a refit-type change that the BLAS budget cannot defer.
++		if (!m_NeedsPrevInit &&
++			(!Util::Math::MatrixNearEqual(transform, m_Transform) || !Util::Math::MatrixNearEqual(m_Transform, m_PrevTransform)))
+ 			MarkDirty(DirtyFlags::Transform);
+ 
+ 		if (m_NeedsPrevInit) {
