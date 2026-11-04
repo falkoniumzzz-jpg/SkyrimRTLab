@@ -64,7 +64,7 @@ index 65b8875..f38841e 100644
  
  #endif // RESTIRGIDATA_HLSLI
 diff --git a/shaders/PostProcess.hlsl b/shaders/PostProcess.hlsl
-index ff59980..cc427c4 100644
+index ff59980..a2d487d 100644
 --- a/shaders/PostProcess.hlsl
 +++ b/shaders/PostProcess.hlsl
 @@ -33,6 +33,7 @@ RWTexture2D<float>  OutViewDepth             : register(u2);
@@ -75,7 +75,7 @@ index ff59980..cc427c4 100644
  #endif
  
  WAVE_SIZE(32)
-@@ -70,10 +71,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+@@ -70,13 +71,29 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
  #endif
  
  #if defined(DLSS_RR)
@@ -98,25 +98,61 @@ index ff59980..cc427c4 100644
 +    const float3 positionVS = ScreenToViewPosition(viewUV, depthVS, Camera.NDCToView);
      const float3 viewDirection = normalize(-ViewToWorldPosition(positionVS, Camera.ViewInverse));
  
-     const float3 albedo = LLGammaToTrueLinear(AlbedoTexture.SampleLevel(PointClampSampler, sourceUV, 0).rgb);
-@@ -84,5 +96,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+-    const float3 albedo = LLGammaToTrueLinear(AlbedoTexture.SampleLevel(PointClampSampler, sourceUV, 0).rgb);
++    // The RR diffuse guide must live in the same space as the noisy color it
++    // demodulates. Without Linear Lighting the engine shades in gamma space, so
++    // a pow(2.2) guide leaves texture detail in color/albedo that RR then blurs
++    // as noise. Physical F0 below still uses the true-linear albedo.
++    const float3 guideAlbedo = AlbedoTexture.SampleLevel(PointClampSampler, sourceUV, 0).rgb;
++    const float3 albedo = LLGammaToTrueLinear(guideAlbedo);
+     const float metalness = Remap(saturate(GNMAOTexture.SampleLevel(PointClampSampler, sourceUV, 0).y), Raytracing.Metalness.x, Raytracing.Metalness.y);
+ 
+     const float3 F0 = PBR::F0(albedo, metalness);
+@@ -84,5 +101,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
      const float2 envBRDF = BRDF::EnvBRDF(roughness, NdotV);
  
      OutSpecularAlbedo[pixelPos] = float3(F0 * envBRDF.x + envBRDF.y);
-+    OutDiffuseAlbedo[pixelPos] = albedo * (1.0f - metalness);
++    OutDiffuseAlbedo[pixelPos] = guideAlbedo * (1.0f - metalness);
 +    OutNormalRoughness[pixelPos] = float4(normal, roughness);
  #endif
  }
 diff --git a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
-index 5d1659b..5d38cc5 100644
+index 5d1659b..bcf9ac1 100644
 --- a/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
 +++ b/shaders/raytracing/GlobalIllumination/RayGeneration.hlsl
-@@ -78,6 +78,20 @@ void Main()
+@@ -33,6 +33,24 @@
+ #   include "include/NRD.hlsli"
+ #endif
+ 
++#if defined(DLSS_RR) || defined(HYBRID_RESTIR)
++// Specular rays that miss see the sky; DLSS-RR wants a world-space distance.
++static const float kRRMissHitDistance = 1.0e6f;
++
++// RR and hybrid ReSTIR have no NRD anti-firefly stage. Clamp only extreme
++// single-path outliers (probabilistic light selection, lobe pdf spikes) against
++// the scene's own light scale, so ordinary bright GI is left untouched.
++static const float kFireflyLightScale = 16.0f;
++
++float3 ClampFirefly(float3 sampleRadiance)
++{
++    const float sunLuminance = Color::RGBToLuminance(float3(Raytracing.DirectionalLight.Color)) * Raytracing.Directional;
++    const float maxLuminance = kFireflyLightScale * max(max(sunLuminance, Raytracing.Sky), max(Raytracing.Point, 1.0f));
++    const float luminance = Color::RGBToLuminance(sampleRadiance);
++    return luminance > maxLuminance ? sampleRadiance * (maxLuminance / luminance) : sampleRadiance;
++}
++#endif
++
+ #if USE_RAY_QUERY
+ WAVE_SIZE(32)
+ [numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, 1)]
+@@ -78,6 +96,22 @@ void Main()
  
  #endif    
      
 +#if defined(DLSS_RR) && !SHARC_UPDATE
-+    RRHitDistance[idx] = 0;
++    // RRHitDistance is a persistent target. It is only written when this frame
++    // traced a specular first-bounce ray, so frames that sampled the diffuse lobe
++    // keep the last known distance instead of dropping to 0 (RR reflection MV).
 +    float rrDistanceSum = 0;
 +    uint rrDistanceCount = 0;
 +    bool rrSpecularSample = false;
@@ -132,7 +168,7 @@ index 5d1659b..5d38cc5 100644
      const float2 uv = float2(idx + 0.5f) / size;
  
      // If the game has dynamic resolution enabled the textures will not cover the entire extent
-@@ -86,7 +100,12 @@ void Main()
+@@ -86,7 +120,12 @@ void Main()
      
      const float2 dynamicUVUnjittered = dynamicUV - (Camera.Jitter / Camera.ScreenSize);
  
@@ -146,7 +182,23 @@ index 5d1659b..5d38cc5 100644
      
      const float depthVS = ScreenToViewDepth(depth, Camera.CameraData);
  
-@@ -150,7 +169,20 @@ void Main()
+@@ -113,10 +152,13 @@ void Main()
+ #   else // RAW_RADIANCE
+         Output[idx] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+ #   endif // !RAW_RADIANCE
+-        
++
++#endif
++#if defined(DLSS_RR) && !SHARC_UPDATE
++        RRHitDistance[idx] = 0;
+ #endif
+         return;
+-    }    
++    }
+     
+     const snorm float4 normalRoughness = NormalRoughness.SampleLevel(DefaultSampler, dynamicUV, 0);
+     
+@@ -150,7 +192,20 @@ void Main()
      Surface sourceSurface = SurfaceMaker::make(positionWS, faceNormal, normalWS, tangentWS, bitangentWS, albedo, roughness, metalness, 0, ao);
      BRDFContext sourceBRDFContext = BRDFContext::make(sourceSurface, -positionCS / hitDistance);
  
@@ -168,7 +220,7 @@ index 5d1659b..5d38cc5 100644
  
      StandardBSDF sourceBSDF = StandardBSDF::make(sourceSurface, sourceSurface.Normal, sourceBRDFContext.ViewDirection, true);     
  
-@@ -192,6 +224,10 @@ void Main()
+@@ -192,6 +247,10 @@ void Main()
      SharcHitData sharcHitData;
  #endif    
      
@@ -179,7 +231,7 @@ index 5d1659b..5d38cc5 100644
  #if defined(NRD)
       float diffHitDist = 0.0f;
       uint diffPathNum = 0;
-@@ -210,7 +246,7 @@ void Main()
+@@ -210,7 +269,7 @@ void Main()
          bsdf = sourceBSDF;
          rayCone = sourceRayCone; 
  
@@ -188,7 +240,7 @@ index 5d1659b..5d38cc5 100644
          float accumulatedHitDist = 0;
  #endif
  
-@@ -243,7 +279,29 @@ void Main()
+@@ -243,7 +302,29 @@ void Main()
              if (bsdf.SampleBSDF(brdfContext, material.Feature, surface, bsdfSample, randomSeed))
                  direction = bsdfSample.wo;
              else
@@ -219,7 +271,7 @@ index 5d1659b..5d38cc5 100644
   
  #if defined(RAW_RADIANCE)
              if (j == 0)
-@@ -286,6 +344,10 @@ void Main()
+@@ -286,6 +367,10 @@ void Main()
              throughput *= bsdfSample.weight;
  #endif   // !RAW_RADIANCE
              
@@ -230,7 +282,7 @@ index 5d1659b..5d38cc5 100644
  #if defined(SHARC) && SHARC_UPDATE
              SharcSetThroughput(sharcState, throughput);
  #else
-@@ -298,6 +360,9 @@ void Main()
+@@ -298,6 +383,9 @@ void Main()
  #       endif            
  #   endif
              
@@ -240,7 +292,7 @@ index 5d1659b..5d38cc5 100644
  #   if RUSSIAN_ROULETTE == 1
          const float rrVal = 1.0f - min(1.0f, Color::RGBToLuminance(throughputColor));              
          const float rrProb = min(rrVal, 0.95f);
-@@ -323,8 +388,11 @@ void Main()
+@@ -323,8 +411,11 @@ void Main()
                  originalThroughput /= (1.0f - rrProb);
  #       endif                
  #   endif
@@ -253,20 +305,21 @@ index 5d1659b..5d38cc5 100644
  #if defined(SHARC) && (SHARC_ENABLE_SH_ENCODING || !SHARC_UPDATE)
              materialRoughnessPrev += bsdfSample.isLobe(LobeType::Diffuse) ? 1.0f : surface.Roughness;
  #endif
-@@ -348,6 +416,12 @@ void Main()
+@@ -348,6 +439,13 @@ void Main()
                  rayCone = RayCone::make(rayCone.getWidth(), min(rayCone.getSpreadAngle() + ComputeRayConeSpreadAngleExpansionByScatterPDF(bsdfSample.pdf), 2.0 * K_PI));
  
              payload = TraceRayStandard(Scene, ray, randomSeed);
 +#if defined(DLSS_RR) && !SHARC_UPDATE
 +            if (j == 0 && rrSpecularSample) {
-+                rrDistanceSum += payload.Hit() ? payload.hitDistance : 0.0f;
++                // A miss reflects the sky: report it as far away, not as a contact hit.
++                rrDistanceSum += payload.Hit() ? payload.hitDistance : kRRMissHitDistance;
 +                rrDistanceCount++;
 +            }
 +#endif
              
              rayCone = rayCone.propagateDistance(payload.hitDistance);
  
-@@ -374,7 +448,7 @@ void Main()
+@@ -374,7 +472,7 @@ void Main()
                  break;
              }
              
@@ -275,7 +328,7 @@ index 5d1659b..5d38cc5 100644
              if (j == 0)
                  accumulatedHitDist = payload.hitDistance;
  #endif                      
-@@ -382,6 +456,15 @@ void Main()
+@@ -382,6 +480,15 @@ void Main()
              float3 localPosition = ray.Origin + direction * payload.hitDistance;
  
              surface = SurfaceMaker::make(localPosition, payload, direction, rayCone, instance, material, false);
@@ -291,10 +344,14 @@ index 5d1659b..5d38cc5 100644
  
  #if defined(SHARC)
              sharcHitData.positionWorld = surface.Position;
-@@ -481,6 +564,15 @@ void Main()
+@@ -481,6 +588,19 @@ void Main()
          
          }
  
++#if (defined(DLSS_RR) || defined(HYBRID_RESTIR)) && !SHARC_UPDATE
++        // Before the reservoir candidate is stored, so ReSTIR cannot spread an outlier.
++        sampleRadiance = ClampFirefly(sampleRadiance);
++#endif
 +#if defined(HYBRID_RESTIR) && !SHARC_UPDATE
 +        if (i == 0 && candidateHit && all(isfinite(sampleRadiance))) {
 +            // Reservoir radiance is incident radiance, not BRDF-modulated color.
@@ -307,7 +364,7 @@ index 5d1659b..5d38cc5 100644
  #if defined(NRD)
  #   if defined(NRD_REBLUR)
          float normHitDist = REBLUR_FrontEnd_GetNormHitDist(accumulatedHitDist, depthVS, Raytracing.HitDistSettings.xyz, sourceSurface.Roughness);
-@@ -496,6 +588,11 @@ void Main()
+@@ -496,6 +616,11 @@ void Main()
          }
  #endif
          
@@ -319,12 +376,13 @@ index 5d1659b..5d38cc5 100644
  #if defined(RAW_RADIANCE)
          if (isSpecularSample)
              specularRadiance += sampleRadiance;
-@@ -521,6 +618,9 @@ void Main()
+@@ -521,6 +646,10 @@ void Main()
  #else
      radiance /= MAX_SAMPLES;
  #endif
 +#if defined(DLSS_RR) && !SHARC_UPDATE
-+    RRHitDistance[idx] = rrDistanceCount > 0 ? rrDistanceSum / rrDistanceCount : 0.0f;
++    if (rrDistanceCount > 0)
++        RRHitDistance[idx] = rrDistanceSum / rrDistanceCount;
 +#endif
         
  #if !(defined(SHARC) && SHARC_UPDATE)
@@ -352,10 +410,10 @@ index 73a1139..e6682c2 100644
  #endif // REGISTERS_HLSLI
 \ No newline at end of file
 diff --git a/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl b/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
-index 1c32a00..1548d08 100644
+index 1c32a00..f26fee8 100644
 --- a/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
 +++ b/shaders/raytracing/RTXDI/ReSTIRGI/GIFinalShading.hlsl
-@@ -44,6 +44,27 @@ void Main(uint2 GlobalIndex : SV_DispatchThreadID)
+@@ -44,6 +44,32 @@ void Main(uint2 GlobalIndex : SV_DispatchThreadID)
      if (!RTXDI_IsValidGIReservoir(finalReservoir))
          return;
  
@@ -369,8 +427,13 @@ index 1c32a00..1548d08 100644
 +    float distanceToSample = length(L);
 +    if (distanceToSample <= 1e-4f) return;
 +    L /= distanceToSample;
-+    if (!RAB_GetConservativeVisibility(rab, finalReservoir.position)) return;
-+    float3 replacement = rab.Eval(L).rgb * finalReservoir.radiance * finalReservoir.weightSum * original.a;
++    // Same semantics as the standard RTXDI path: an occluded reservoir sample
++    // contributes nothing. Falling back to the raw 1-spp term here made pixels
++    // switch between two estimators from frame to frame (visible flicker).
++    float3 replacement = 0;
++    if (!giParams.finalShadingParams.enableFinalVisibility ||
++        RAB_GetConservativeVisibility(rab, finalReservoir.position))
++        replacement = rab.Eval(L).rgb * finalReservoir.radiance * finalReservoir.weightSum * original.a;
 +    if (!all(isfinite(replacement))) return;
 +    float4 current = OutputRadiance[GlobalIndex];
 +    float3 color = max(0.0f, current.rgb - original.rgb + replacement);
@@ -383,7 +446,7 @@ index 1c32a00..1548d08 100644
      // Reconstruct initial reservoir from secondary surface data
      RTXDI_GIReservoir initialReservoir = RTXDI_EmptyGIReservoir();
      {
-@@ -114,4 +135,5 @@ void Main(uint2 GlobalIndex : SV_DispatchThreadID)
+@@ -114,4 +140,5 @@ void Main(uint2 GlobalIndex : SV_DispatchThreadID)
      float3 linearColor = LLGammaToTrueLinear(currentColor.rgb);
      linearColor += finalGI;
      OutputRadiance[GlobalIndex] = float4(LLTrueLinearToGamma(linearColor), currentColor.a);

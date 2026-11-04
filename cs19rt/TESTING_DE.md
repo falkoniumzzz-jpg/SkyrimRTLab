@@ -65,6 +65,21 @@ Fresnel* „Enable Vanilla Fresnel“ und „Enable Phong to GGX“ einschalten.
 sich nur die Glanzlichter von Sonne und Lampen auf normalen (nicht PBR) Materialien.
 Bitte erst nach dem Ruckel-Test einschalten.
 
+## Flackern mit DLSS RR prüfen
+
+Diese Version ändert nur die Eingaben für DLSS RR und den Hybrid-ReSTIR-Pfad. Mit NRD
+Reblur oder Relax bleibt das Bild gleich (ReSTIR ist im GI-Modus mit NRD ohnehin aus).
+
+1. Gleiche Stelle, an der es vorher geflackert hat. Upscaling DLSS, Denoiser DLSS RR,
+   ReSTIR GI aus. Flackert es noch, wo und wie stark?
+2. Dasselbe mit ReSTIR GI an (Defaults, Boiling Filter an, Final Visibility an).
+3. Zum Vergleich einmal NRD Reblur.
+
+Geändert: Abstand der Spiegelstrahlen springt nicht mehr auf 0, Ausreißer-Pixel werden
+begrenzt, verdeckte ReSTIR-Samples zählen als 0 statt auf den Roh-Wert zurückzufallen,
+und der Albedo-Hinweis für RR liegt im selben Farbraum wie das Bild. Wenn RR jetzt
+irgendwo dunkle Sprenkel zeigt, bitte melden (Hinweis auf den ReSTIR-Sichtbarkeitstest).
+
 ## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
 
 1. Drücke **Strg+Umschalt+F12**, solange das Spiel hängt. Crash Logger schreibt dann
