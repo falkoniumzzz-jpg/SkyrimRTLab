@@ -251,7 +251,7 @@ index 0000000..fc5684f
 +#endif
 diff --git a/features/Cloud Relight/Shaders/CloudRelight/Draine.hlsli b/features/Cloud Relight/Shaders/CloudRelight/Draine.hlsli
 new file mode 100644
-index 0000000..cdfc6c1
+index 0000000..50d945f
 --- /dev/null
 +++ b/features/Cloud Relight/Shaders/CloudRelight/Draine.hlsli	
 @@ -0,0 +1,74 @@
@@ -299,7 +299,7 @@ index 0000000..cdfc6c1
 +//   u = dot(prev_dir, next_dir)
 +float evalDraine(in float u, in float g, in float a)
 +{
-+	return ((1 - g * g) * (1 + a * u * u)) / (4. * (1 + (a * (1 + 2 * g * g)) / 3.) * c_pi * Math::SafePow(1 + g * g - 2 * g * u, 1.5));
++	return ((1 - g * g) * (1 + a * u * u)) / (4. * (1 + (a * (1 + 2 * g * g)) / 3.) * c_pi * pow(abs(1 + g * g - 2 * g * u), 1.5)  /* Math::SafePow in Open Shaders */);
 +}
 +
 +// sample: (sample an exact deflection cosine)
