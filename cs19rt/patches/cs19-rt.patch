@@ -369,10 +369,15 @@ index 0000000..39c05b4
 +autoupload = false
 +aio = true
 diff --git a/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli b/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli
-index 4aa033b..59ef884 100644
+index 4aa033b..dcdee76 100644
 --- a/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli	
 +++ b/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli	
-@@ -3,6 +3,8 @@
+@@ -1,8 +1,13 @@
++#ifndef CLOUD_SHADOWS_HLSLI
++#define CLOUD_SHADOWS_HLSLI
++
+ #include "Common/Game.hlsli"
+ 
  namespace CloudShadows
  {
  	TextureCube<float> CloudShadowsTexture : register(t25);
@@ -381,6 +386,12 @@ index 4aa033b..59ef884 100644
  
  	const static float CloudHeight = (2e3f / GAME_UNIT_TO_M);
  	const static float PlanetRadius = (6371e3f / GAME_UNIT_TO_M);
+@@ -26,3 +31,5 @@ namespace CloudShadows
+ 		return saturate(1.0 - cloudCubeSample * SharedData::cloudShadowsSettings.Opacity);
+ 	}
+ }
++
++#endif  // CLOUD_SHADOWS_HLSLI
 diff --git a/features/Foliage Lighting/CORE b/features/Foliage Lighting/CORE
 new file mode 100644
 index 0000000..8b13789
