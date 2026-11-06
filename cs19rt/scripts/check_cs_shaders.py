@@ -3,7 +3,9 @@
 Skyrim compiles these permutations on the user's machine; an error there silently breaks
 every affected material. This check builds the merged AIO shader tree and compiles the
 recorded Lighting pixel-shader permutations with and without RAYTRACING (and with the
-ported VANILLA_FRESNEL define), plus grass and the deferred composite with the RT defines.
+ported VANILLA_FRESNEL define), the Sky permutations with the ported CLOUD_RELIGHT define,
+plus grass and the deferred composite with the RT defines. Foliage Lighting is part of the
+recorded TREE_ANIM and grass permutations.
 """
 import argparse
 import os
@@ -35,6 +37,14 @@ def jobs_from_config(cs):
     jobs = []
     common = []
     for shader in config["shaders"]:
+        if shader["file"] == "Sky.hlsl":
+            # Cloud Relight (ported from Open Shaders) only adds code under CLOUD_RELIGHT.
+            sky = shader["configs"]["PSHADER"]
+            sky_common = [d for d in sky["common_defines"] if not d.startswith("D3DCOMPILE")]
+            for entry in sky["entries"]:
+                defines = sky_common + entry["defines"]
+                jobs.append(("Sky.hlsl", "ps_5_0", "main", defines + ["CLOUD_RELIGHT"], defines))
+            continue
         if shader["file"] != "Lighting.hlsl":
             continue
         ps = shader["configs"]["PSHADER"]

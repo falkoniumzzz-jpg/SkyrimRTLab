@@ -80,6 +80,21 @@ begrenzt, verdeckte ReSTIR-Samples zählen als 0 statt auf den Roh-Wert zurückz
 und der Albedo-Hinweis für RR liegt im selben Farbraum wie das Bild. Wenn RR jetzt
 irgendwo dunkle Sprenkel zeigt, bitte melden (Hinweis auf den ReSTIR-Sichtbarkeitstest).
 
+## Neu: Cloud Relight, Foliage Lighting, ohne Inverse Square Lighting
+
+Aus Open Shaders übernommen, beide standardmäßig an. Inverse Square Lighting wird nicht mehr
+mitgeliefert: Lichter nutzen den Vanilla-Abfall, im Raster und im RT.
+
+1. **Wolken (Cloud Relight):** Sonnenauf- oder -untergang mit Wolken. Wolken sollten von der
+   Sonne beleuchtet wirken, mit dunkleren Unterseiten und hellen Rändern zur Sonne hin.
+   Vergleich: CS-Menü → *Cloud Relight* → „Enabled“ aus und an. Braucht Cloud Shadows (an).
+2. **Laub (Foliage Lighting):** Gegen die Sonne durch Baumkronen und über Gras schauen. Blätter
+   und Gras sollten etwas durchleuchten. Vergleich: CS-Menü → *Foliage Lighting* → „Enable
+   Foliage Lighting“ aus und an.
+3. **Lichter:** Fackeln und Kerzen sollten so hell und weit leuchten wie in Vanilla. Unter
+   *Disable at Boot* steht Inverse Square Lighting nicht mehr in der Liste der geladenen
+   Features (`CommunityShaders.log`: „InverseSquareLighting.ini failed to load“).
+
 ## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
 
 1. Drücke **Strg+Umschalt+F12**, solange das Spiel hängt. Crash Logger schreibt dann

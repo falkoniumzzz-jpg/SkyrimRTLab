@@ -18,7 +18,9 @@ from prepare import prepare
 
 DOCS_DIR = "FalkosLichtspiel CS19 RT Docs"
 # Debug-only feature from the RT branch: compiled in, but not shipped/loaded.
-NOT_SHIPPED = ["Shaders/Features/SceneGraphExplorer.ini"]
+# Inverse Square Lighting is not shipped on purpose (Falko, 06.11.): without its ini the
+# feature never loads, no light gets the ISL flag, and CER uses the vanilla falloff too.
+NOT_SHIPPED = ["Shaders/Features/SceneGraphExplorer.ini", "Shaders/Features/InverseSquareLighting.ini"]
 
 
 def tools():

@@ -23,6 +23,379 @@ index 430e9a9..27e0e29 100644
  endif()
  # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
  if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
+diff --git a/features/Cloud Relight/Shaders/CloudRelight/CloudRelight.hlsli b/features/Cloud Relight/Shaders/CloudRelight/CloudRelight.hlsli
+new file mode 100644
+index 0000000..fc5684f
+--- /dev/null
++++ b/features/Cloud Relight/Shaders/CloudRelight/CloudRelight.hlsli	
+@@ -0,0 +1,220 @@
++#ifndef CLOUD_RELIGHT_HLSLI
++#define CLOUD_RELIGHT_HLSLI
++
++#include "CloudRelight/Draine.hlsli"
++#include "Common/Color.hlsli"
++#include "Common/Math.hlsli"
++#include "Common/SharedData.hlsli"
++
++#if defined(CLOUD_SHADOWS)
++#	include "CloudShadows/CloudShadows.hlsli"
++#endif
++
++namespace CloudRelight
++{
++	static const float kMinimumTransmittance = 1e-3;
++	static const float kSilverScatterScale = 1.35;
++	static const float kEdgeFadeInStart = 0.08;
++	static const float kEdgeFadeInEnd = 0.35;
++	static const float kEdgeFadeOutStart = 0.45;
++	static const float kEdgeFadeOutEnd = 0.85;
++	static const float kSilverExtinction = 0.5;
++
++	float GetOpticalDepth(float cloudDensity)
++	{
++		return -log(max(1.0 - saturate(cloudDensity), kMinimumTransmittance));
++	}
++
++	float GetBodyScatter(float opticalDepth)
++	{
++		return 1.0 - exp(-opticalDepth);
++	}
++
++	float GetDirectSingleScatter(float opticalDepth)
++	{
++		static const float kDirectScatterScale = 0.9;
++		static const float kDirectExtinction = 0.75;
++		return kDirectScatterScale * opticalDepth * exp(-kDirectExtinction * opticalDepth);
++	}
++
++	float GetSilverDensity(float cloudDensity, float spread)
++	{
++		float normalizedDensity = saturate(cloudDensity);
++		float normalizedSpread = clamp(spread, -1.0, 1.0);
++		float fadeStart = max(normalizedSpread, 0.0);
++		float fadeEnd = min(1.0 + normalizedSpread, 1.0);
++		if (fadeStart == fadeEnd)
++			return normalizedSpread < 0.0 ? float(normalizedDensity > 0.0) : float(normalizedDensity >= 1.0);
++
++		return saturate((normalizedDensity - fadeStart) / (fadeEnd - fadeStart));
++	}
++
++	float GetBroadSilverDensityWeight(float cloudDensity, float spread)
++	{
++		return 1.0 - GetSilverDensity(cloudDensity, spread);
++	}
++
++	float GetSilverSingleScatter(float opticalDepth, float cloudDensity, float spread)
++	{
++		float silverDensity = GetSilverDensity(cloudDensity, spread);
++		float edgeMask =
++			smoothstep(kEdgeFadeInStart, kEdgeFadeInEnd, cloudDensity) *
++			(1.0 - smoothstep(kEdgeFadeOutStart, kEdgeFadeOutEnd, silverDensity));
++		return kSilverScatterScale * edgeMask * (1.0 - exp(-opticalDepth)) * exp(-kSilverExtinction * opticalDepth);
++	}
++
++	float GetInnerShadowOpacity(float capturedOpacity)
++	{
++		return capturedOpacity * capturedOpacity;
++	}
++
++	namespace Phase
++	{
++		static const float kCoreForwardG = 0.94;
++		static const float kAureoleG = 0.78;
++		static const float kAureoleAlpha = 2.0;
++		static const float kAureoleWeight = 0.45;
++
++		float BroadSilverLining(float cosTheta)
++		{
++			static const float kBackwardG = -0.151765;
++			static const float kForwardG = 0.611521;
++			static const float kForwardAlpha = 60.0;
++			static const float kForwardWeight = 0.923579;
++			return (1.0 - kForwardWeight) * evalDraine(cosTheta, kBackwardG, 0.0) +
++			       kForwardWeight * evalDraine(cosTheta, kForwardG, kForwardAlpha);
++		}
++
++		float SilverLining(float cosTheta)
++		{
++			float isotropicPhase = 0.25 * Math::INV_PI;
++			float forwardCore = max(0.0, evalDraine(cosTheta, kCoreForwardG, 0.0) - isotropicPhase);
++			float forwardAureole = max(0.0, evalDraine(cosTheta, kAureoleG, kAureoleAlpha) - isotropicPhase);
++			return forwardCore + kAureoleWeight * forwardAureole;
++		}
++	}
++
++	float GetPhaseRelighting(float cosTheta, float3 scatter)
++	{
++		float isotropicPhase = 0.25 * Math::INV_PI;
++		float broadSilverPhase = max(0.0, Phase::BroadSilverLining(cosTheta) - isotropicPhase);
++		return scatter.x + scatter.y * broadSilverPhase + scatter.z * Phase::SilverLining(cosTheta);
++	}
++
++#if defined(CLOUD_SHADOWS)
++	float GetInnerShadow(float3 viewDir, float3 dirLightDir, float cloudDensity, SamplerState textureSampler)
++	{
++		static const float kRayStep = 1.0 / 32.0;
++		float rayPos = kRayStep * 0.5;
++		float4 raySelfShadow = 0.0;
++		float4 rayCompletedShadow = 0.0;
++
++		static const float3 kPoissonDisc[4] = {
++			float3(0.460921f, 0.615192f, 0.887539f),
++			float3(0.757347f, 0.911008f, 0.189581f),
++			float3(0.548753f, 0.145482f, 0.0548723f),
++			float3(0.90051f, 0.157048f, 0.623493f)
++		};
++
++		[unroll] for (int i = 0; i < 4; i++)
++		{
++			float3 raySample = normalize(lerp(viewDir, dirLightDir, rayPos));
++			raySample += (kPoissonDisc[i] * 2.0 - 1.0) * 0.01;
++
++			if (raySample.z < 0.0) {
++				raySelfShadow[i] += -raySample.z;
++				rayCompletedShadow[i] += -raySample.z;
++			} else {
++				float selfShadowOpacity = CloudShadows::CloudSelfShadowTexture.SampleLevel(textureSampler, raySample, 0).x;
++				float completedShadowOpacity = CloudShadows::CloudShadowsTexture.SampleLevel(textureSampler, raySample, 0).x;
++				raySelfShadow[i] = max(raySelfShadow[i], GetInnerShadowOpacity(selfShadowOpacity));
++				rayCompletedShadow[i] = max(rayCompletedShadow[i], GetInnerShadowOpacity(completedShadowOpacity));
++			}
++
++			rayPos += kRayStep;
++		}
++
++		float selfShadowLight = 1.0 - saturate(dot(raySelfShadow, 0.25));
++		float completedShadowLight = 1.0 - saturate(dot(rayCompletedShadow, 0.25));
++		return lerp(selfShadowLight, max(selfShadowLight, completedShadowLight), saturate(cloudDensity));
++	}
++
++	float GetDirectionalRelighting(float3 viewDir, float3 lightDir, float cloudDensity, float3 scatter, SamplerState textureSampler)
++	{
++		float cosTheta = clamp(dot(viewDir, lightDir), -1.0, 1.0);
++		return GetInnerShadow(viewDir, lightDir, cloudDensity, textureSampler) * GetPhaseRelighting(cosTheta, scatter);
++	}
++
++	float GetCelestialRelighting(float3 viewDir, float3 dirLightDir, float cloudDensity, float3 scatter, float3 lightWeights, SamplerState textureSampler)
++	{
++		float relighting = 0.0;
++		// A negative sun weight preserves the engine light when Sky Sync is inactive.
++		[branch] if (lightWeights.x < 0.0)
++		{
++			relighting = GetDirectionalRelighting(viewDir, dirLightDir, cloudDensity, scatter, textureSampler);
++		}
++		else
++		{
++			float3 lightDirections[3] = {
++				SharedData::SunDirection.xyz,
++				SharedData::MasserDirection.xyz,
++				SharedData::SecundaDirection.xyz
++			};
++			float fallbackWeight = 1.0 - saturate(dot(lightWeights, 1.0));
++			[unroll] for (int i = 0; i < 3; i++)
++			{
++				[branch] if (lightWeights[i] > 0.0)
++				{
++					float directionLengthSquared = dot(lightDirections[i], lightDirections[i]);
++					[branch] if (directionLengthSquared > EPSILON_LENGTH_SQ)
++					{
++						float3 lightDir = lightDirections[i] * rsqrt(directionLengthSquared);
++						relighting += lightWeights[i] * GetDirectionalRelighting(viewDir, lightDir, cloudDensity, scatter, textureSampler);
++					}
++					else
++					{
++						fallbackWeight += lightWeights[i];
++					}
++				}
++			}
++
++			[branch] if (fallbackWeight > EPSILON_DIVISION)
++				relighting += fallbackWeight * GetInnerShadow(viewDir, dirLightDir, cloudDensity, textureSampler) * scatter.x;
++		}
++		return relighting;
++	}
++
++	float3 RelightCloud(float4 baseColor, float3 viewDir, SamplerState textureSampler)
++	{
++		if (baseColor.w <= 0.0)
++			return baseColor.rgb;
++
++		SharedData::CloudRelightSettings data = SharedData::cloudRelightSettings;
++
++		float3 dirLightDir = normalize(SharedData::DirLightDirection.xyz);
++		float linearLightingDirLightMultiplier =
++			(SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0;
++		float3 dirLightColor =
++			Color::DirectionalLight(SharedData::DirLightColor.rgb / max(linearLightingDirLightMultiplier, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * linearLightingDirLightMultiplier * Color::VanillaNormalization();
++		float isotropicPhase = 0.25 * Math::INV_PI;
++		float opticalDepth = GetOpticalDepth(baseColor.a);
++		float bodyScatter = GetBodyScatter(opticalDepth);
++		float directSingleScatter = GetDirectSingleScatter(opticalDepth);
++		float broadSilverDensityWeight = GetBroadSilverDensityWeight(baseColor.a, data.silverLiningSpread);
++		float silverSingleScatter = GetSilverSingleScatter(opticalDepth, baseColor.a, data.silverLiningSpread);
++		float bodyRelighting = bodyScatter * isotropicPhase * Math::TAU;
++		float broadSilverRelighting = directSingleScatter * broadSilverDensityWeight * Math::TAU * data.silverLiningMix;
++		float silverRelighting = silverSingleScatter * data.silverLiningMix;
++
++		float3 cloudColor = baseColor.rgb * data.cloudOriginalMix;
++
++		float3 scatter = float3(bodyRelighting, broadSilverRelighting, silverRelighting);
++		float relighting = GetCelestialRelighting(viewDir, dirLightDir, baseColor.a, scatter, data.celestialLightWeights, textureSampler);
++		cloudColor += baseColor.rgb * dirLightColor * data.cloudRelightMix * relighting;
++
++		return cloudColor;
++	}
++#endif
++}
++
++#endif
+diff --git a/features/Cloud Relight/Shaders/CloudRelight/Draine.hlsli b/features/Cloud Relight/Shaders/CloudRelight/Draine.hlsli
+new file mode 100644
+index 0000000..cdfc6c1
+--- /dev/null
++++ b/features/Cloud Relight/Shaders/CloudRelight/Draine.hlsli	
+@@ -0,0 +1,74 @@
++#ifndef CLOUD_RELIGHT_DRAINE_HLSLI
++#define CLOUD_RELIGHT_DRAINE_HLSLI
++
++/*
++ * SPDX-FileCopyrightText: Copyright (c) <2023> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++ * SPDX-License-Identifier: MIT
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++// [Jendersie and d'Eon 2023]
++//   SIGGRAPH 2023 Talks
++//   https://doi.org/10.1145/3587421.3595409
++//   https://research.nvidia.com/labs/rtr/approximate-mie/
++
++// EVAL and SAMPLE for the Draine (and therefore Cornette-Shanks) phase function
++//   g = HG shape parameter
++//   a = "alpha" shape parameter
++
++// Warning: these functions don't special case isotropic scattering and can numerically fail for certain inputs
++
++#include "Common/Math.hlsli"
++static const float c_pi = Math::PI;
++
++// eval:
++//   u = dot(prev_dir, next_dir)
++float evalDraine(in float u, in float g, in float a)
++{
++	return ((1 - g * g) * (1 + a * u * u)) / (4. * (1 + (a * (1 + 2 * g * g)) / 3.) * c_pi * Math::SafePow(1 + g * g - 2 * g * u, 1.5));
++}
++
++// sample: (sample an exact deflection cosine)
++//   xi = a uniform random real in [0,1]
++float sampleDraineCos(in float xi, in float g, in float a)
++{
++	const float g2 = g * g;
++	const float g3 = g * g2;
++	const float g4 = g2 * g2;
++	const float g6 = g2 * g4;
++	const float pgp1_2 = (1 + g2) * (1 + g2);
++	const float T1 = (-1 + g2) * (4 * g2 + a * pgp1_2);
++	const float T1a = -a + a * g4;
++	const float T1a3 = T1a * T1a * T1a;
++	const float T2 = -1296 * (-1 + g2) * (a - a * g2) * (T1a) * (4 * g2 + a * pgp1_2);
++	const float T3 = 3 * g2 * (1 + g * (-1 + 2 * xi)) + a * (2 + g2 + g3 * (1 + 2 * g2) * (-1 + 2 * xi));
++	const float T4a = 432 * T1a3 + T2 + 432 * (a - a * g2) * T3 * T3;
++	const float T4b = -144 * a * g2 + 288 * a * g4 - 144 * a * g6;
++	const float T4b3 = T4b * T4b * T4b;
++	const float T4 = T4a + sqrt(-4 * T4b3 + T4a * T4a);
++	const float T4p3 = pow(T4, 1.0 / 3.0);
++	const float T6 = (2 * T1a + (48 * pow(2, 1.0 / 3.0) * (-(a * g2) + 2 * a * g4 - a * g6)) / T4p3 +
++						 T4p3 / (3. * pow(2, 1.0 / 3.0))) /
++	                 (a - a * g2);
++	const float T5 = 6 * (1 + g2) + T6;
++	return (1 + g2 - pow(-0.5 * sqrt(T5) + sqrt(6 * (1 + g2) - (8 * T3) / (a * (-1 + g2) * sqrt(T5)) - T6) / 2., 2)) / (2. * g);
++}
++
++#endif
+diff --git a/features/Cloud Relight/Shaders/CloudRelight/LICENSE b/features/Cloud Relight/Shaders/CloudRelight/LICENSE
+new file mode 100644
+index 0000000..5965740
+--- /dev/null
++++ b/features/Cloud Relight/Shaders/CloudRelight/LICENSE	
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/features/Cloud Relight/Shaders/Features/CloudRelight.ini b/features/Cloud Relight/Shaders/Features/CloudRelight.ini
+new file mode 100644
+index 0000000..39c05b4
+--- /dev/null
++++ b/features/Cloud Relight/Shaders/Features/CloudRelight.ini	
+@@ -0,0 +1,6 @@
++[Info]
++Version = 1-2-0
++
++[Nexus]
++autoupload = false
++aio = true
+diff --git a/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli b/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli
+index 4aa033b..59ef884 100644
+--- a/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli	
++++ b/features/Cloud Shadows/Shaders/CloudShadows/CloudShadows.hlsli	
+@@ -3,6 +3,8 @@
+ namespace CloudShadows
+ {
+ 	TextureCube<float> CloudShadowsTexture : register(t25);
++	// Occlusion of the cloud layers up to the one being drawn; bound by CloudShadows::ModifySky.
++	TextureCube<float> CloudSelfShadowTexture : register(t26);
+ 
+ 	const static float CloudHeight = (2e3f / GAME_UNIT_TO_M);
+ 	const static float PlanetRadius = (6371e3f / GAME_UNIT_TO_M);
+diff --git a/features/Foliage Lighting/CORE b/features/Foliage Lighting/CORE
+new file mode 100644
+index 0000000..8b13789
+--- /dev/null
++++ b/features/Foliage Lighting/CORE	
+@@ -0,0 +1 @@
++
+diff --git a/features/Foliage Lighting/Shaders/Features/FoliageLighting.ini b/features/Foliage Lighting/Shaders/Features/FoliageLighting.ini
+new file mode 100644
+index 0000000..000b60a
+--- /dev/null
++++ b/features/Foliage Lighting/Shaders/Features/FoliageLighting.ini	
+@@ -0,0 +1,2 @@
++[Info]
++Version = 1-0-0
 diff --git a/features/Raytracing/Shaders/Features/Raytracing.ini b/features/Raytracing/Shaders/Features/Raytracing.ini
 new file mode 100644
 index 0000000..19f0144
@@ -1572,8 +1945,57 @@ index da5425b..c9602ba 100644
 +    "feature.upscaling.dlss_rr_model_preset_e": "预设 E",
 +    "feature.upscaling.frame_generation_unavailable": "帧生成在此系统上不可用。\n这需要 NVIDIA DLSS-G 或 AMD FSR 3.1 帧生成支持以及 D3D12 互操作。"
  }
+diff --git a/package/Shaders/Common/FoliageTransmission.hlsli b/package/Shaders/Common/FoliageTransmission.hlsli
+new file mode 100644
+index 0000000..cb979a2
+--- /dev/null
++++ b/package/Shaders/Common/FoliageTransmission.hlsli
+@@ -0,0 +1,30 @@
++#ifndef FOLIAGE_TRANSMISSION_HLSLI
++#define FOLIAGE_TRANSMISSION_HLSLI
++
++// Foliage Lighting (ported from Open Shaders, https://github.com/alandtse/open-shaders,
++// GPL-3.0-or-later). Cheap view-dependent foliage transmission shared by PBR and vanilla
++// foliage paths and by grass.
++namespace Foliage
++{
++	namespace Constants
++	{
++		static const float Wrap = 0.5f;
++		static const float ScatterRoughness = 0.6f;
++		static const float Pi = 3.14159265f;
++	}
++}
++
++float GetFoliageTransmission(float NdotL, float VdotL)
++{
++	const float wrapDenominator = (1.0f + Foliage::Constants::Wrap) * (1.0f + Foliage::Constants::Wrap);
++	float wrappedBacklight = saturate((-NdotL + Foliage::Constants::Wrap) / wrapDenominator);
++
++	float forwardScatter = saturate(-VdotL);
++	const float scatterAlpha2 = Foliage::Constants::ScatterRoughness * Foliage::Constants::ScatterRoughness;
++	float scatterDenominator = forwardScatter * forwardScatter * (scatterAlpha2 - 1.0f) + 1.0f;
++	float scatter = scatterAlpha2 / (Foliage::Constants::Pi * scatterDenominator * scatterDenominator);
++
++	return wrappedBacklight * scatter;
++}
++
++#endif
+diff --git a/package/Shaders/Common/LightingCommon.hlsli b/package/Shaders/Common/LightingCommon.hlsli
+index 3f25625..639937a 100644
+--- a/package/Shaders/Common/LightingCommon.hlsli
++++ b/package/Shaders/Common/LightingCommon.hlsli
+@@ -1,6 +1,8 @@
+ #ifndef LIGHTING_COMMON_HLSLI
+ #define LIGHTING_COMMON_HLSLI
+ 
++#include "Common/FoliageTransmission.hlsli"
++
+ struct DirectContext
+ {
+ 	float3 worldNormal;
 diff --git a/package/Shaders/Common/LightingEval.hlsli b/package/Shaders/Common/LightingEval.hlsli
-index 21748a0..abb0ff5 100644
+index 21748a0..7a4c730 100644
 --- a/package/Shaders/Common/LightingEval.hlsli
 +++ b/package/Shaders/Common/LightingEval.hlsli
 @@ -95,6 +95,27 @@ float3 VanillaSpecular(DirectContext context, float shininess, float2 uv, float2
@@ -1604,7 +2026,20 @@ index 21748a0..abb0ff5 100644
  void EvaluateLighting(DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv, float2 uv_ddx, float2 uv_ddy, out DirectLightingOutput lightingOutput)
  {
  	lightingOutput = (DirectLightingOutput)0;
-@@ -145,6 +166,17 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
+@@ -134,6 +155,12 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
+ 	float3 diffuseLightColor = context.lightColor * context.detailedShadow;
+ 	float3 softLightColor = context.lightColor * context.softShadow;
+ 	lightingOutput.diffuse = saturate(NdotL) * diffuseLightColor * Color::VanillaNormalization();
++#	if defined(TREE_ANIM)
++	[branch] if (SharedData::foliageLightingSettings.EnableFoliageScattering != 0)
++	{
++		lightingOutput.transmission += material.BaseColor * GetFoliageTransmission(NdotL, dot(context.viewDir, context.lightDir)) * diffuseLightColor * Color::VanillaNormalization();
++	}
++#	endif
+ #	if defined(SOFT_LIGHTING)
+ 	lightingOutput.diffuse += softLightColor * GetSoftLightMultiplier(NdotL) * material.rimSoftLightColor * Color::VanillaNormalization();
+ #	endif
+@@ -145,6 +172,17 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
  #	if defined(BACK_LIGHTING)
  	lightingOutput.diffuse += softLightColor * saturate(-NdotL) * material.backLightColor * Color::VanillaNormalization();
  #	endif
@@ -1622,6 +2057,42 @@ index 21748a0..abb0ff5 100644
  	lightingOutput.specular = VanillaSpecular(context, material.Shininess, uv, uv_ddx, uv_ddy) * material.SpecularColor * material.Glossiness * diffuseLightColor * Color::VanillaNormalization();
  #endif
  }
+diff --git a/package/Shaders/Common/PBR.hlsli b/package/Shaders/Common/PBR.hlsli
+index 22c1a12..e098347 100644
+--- a/package/Shaders/Common/PBR.hlsli
++++ b/package/Shaders/Common/PBR.hlsli
+@@ -171,6 +171,18 @@ namespace PBR
+ 				lightingOutput.specular = lerp(lightingOutput.specular, fuzzSpecular, material.FuzzWeight);
+ 			}
+ 
++#	if defined(TREE_ANIM)
++			[branch] if (SharedData::foliageLightingSettings.EnableFoliageScattering != 0)
++			{
++				// Deliberately do not use material thickness here. Foliage geometry is
++				// commonly flagged as subsurface with a baked thickness of 1, and wind
++				// deformation invalidates any thickness assumption. Use only the current
++				// normal/light/view angles and base color.
++				float foliageTransmission = saturate(-NdotL) * BRDF::Diffuse_Lambert();
++				foliageTransmission += GetFoliageTransmission(NdotL, VdotL);
++				lightingOutput.transmission += material.BaseColor * foliageTransmission * detailedLightColor * kD;
++			}
++#	endif
+ 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
+ #	if !defined(TREE_ANIM)
+ 			{
+@@ -274,6 +286,12 @@ namespace PBR
+ 
+ 		// Apply ambient occlusion with multi-bounce approximation
+ 		lobeWeights.diffuse *= MultiBounceAO(material.BaseColor, material.AO);
++#if defined(TREE_ANIM)
++		// Foliage Lighting: intentionally additive and AO-independent, restores a small
++		// amount of indirect ambient response for foliage after the AO adjustment.
++		[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientBoost != 0)
++			lobeWeights.diffuse += material.BaseColor * SharedData::foliageLightingSettings.FoliageAmbientAmount;
++#endif
+ 		float alpha = material.Roughness * material.Roughness;
+ 		lobeWeights.specular *= SpecularOcclusion(NdotV, alpha, material.AO);
+ 	}
 diff --git a/package/Shaders/Common/Permutation.hlsli b/package/Shaders/Common/Permutation.hlsli
 index 4dd0105..84a1153 100644
 --- a/package/Shaders/Common/Permutation.hlsli
@@ -1635,7 +2106,7 @@ index 4dd0105..84a1153 100644
  
  	namespace ExtraFeatureFlags
 diff --git a/package/Shaders/Common/SharedData.hlsli b/package/Shaders/Common/SharedData.hlsli
-index 8ae0643..7f807a1 100644
+index 8ae0643..f4d9e91 100644
 --- a/package/Shaders/Common/SharedData.hlsli
 +++ b/package/Shaders/Common/SharedData.hlsli
 @@ -334,6 +334,16 @@ namespace SharedData
@@ -1655,7 +2126,7 @@ index 8ae0643..7f807a1 100644
  	struct TruePBRSettings
  	{
  		float VertexAOStrength;
-@@ -351,6 +361,23 @@ namespace SharedData
+@@ -351,6 +361,47 @@ namespace SharedData
  		float4 wetParams;
  	};
  
@@ -1676,10 +2147,34 @@ index 8ae0643..7f807a1 100644
 +		float pad;
 +	};
 +
++	// Cloud Relight (ported from Open Shaders). Must match CloudRelight::Settings.
++	struct CloudRelightSettings
++	{
++		uint enabled;
++		float cloudRelightMix;
++		float cloudOriginalMix;
++		float silverLiningMix;
++
++		float silverLiningSpread;
++		float3 celestialLightWeights;
++	};
++
++	// Foliage Lighting (ported from Open Shaders). Must match FoliageLighting::Settings;
++	// the master toggle is folded into the flags on the CPU side.
++	struct FoliageLightingSettings
++	{
++		uint EnableFoliageScattering;
++		uint EnableFoliageAmbientBoost;
++		uint EnableFoliageAmbientFlip;
++		float FoliageAmbientAmount;
++		uint EnableGrassScattering;
++		uint3 pad;
++	};
++
  	cbuffer FeatureData : register(b6)
  	{
  		GrassLightingSettings grassLightingSettings;
-@@ -370,8 +397,10 @@ namespace SharedData
+@@ -370,8 +421,12 @@ namespace SharedData
  		ENBSettings enbSettings;
  		TerrainBlendingSettings terrainBlendingSettings;
  		ExponentialHeightFogSettings exponentialHeightFogSettings;
@@ -1687,6 +2182,8 @@ index 8ae0643..7f807a1 100644
  		TruePBRSettings truePBRSettings;
  		SkinData skinData;
 +		VanillaFresnelSettings vanillaFresnelSettings;
++		CloudRelightSettings cloudRelightSettings;
++		FoliageLightingSettings foliageLightingSettings;
  	};
  
  	Texture2D<float4> DepthTexture : register(t17);
@@ -1733,7 +2230,7 @@ index c46430a..b000577 100644
  
  	color = Color::IrradianceToGamma(color);
 diff --git a/package/Shaders/Lighting.hlsl b/package/Shaders/Lighting.hlsl
-index ab34912..51315e9 100644
+index ab34912..559d177 100644
 --- a/package/Shaders/Lighting.hlsl
 +++ b/package/Shaders/Lighting.hlsl
 @@ -13,6 +13,8 @@
@@ -1894,7 +2391,7 @@ index ab34912..51315e9 100644
  				}
  
  #			if defined(CREATOR)
-@@ -2015,7 +2087,39 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2015,16 +2087,47 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  				material.Roughness = lerp(material.Roughness, complexMaterialRoughness, complexMaterial);
  				material.F0 = lerp(material.F0, complexSpecular, complexMaterial);
  #			endif
@@ -1920,21 +2417,22 @@ index ab34912..51315e9 100644
 +#				endif
 +				}
 +#			endif
-+			}
-+		}
-+#		endif
-+
+ 			}
+ 		}
+ #		endif
+ 
 +#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
 +		if (enableVanillaFresnel) {
 +			if (isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
 +				material.F0 = 0.027;
 +				material.Roughness = 0.1;
- 			}
++			}
 +			material.Roughness = clamp(material.Roughness * SharedData::vanillaFresnelSettings.RoughnessMultiplier, 0.04, 1.0);
- 		}
- #		endif
- 
-@@ -2024,7 +2128,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
++		}
++#		endif
++
+ 		if (!dynamicCubemap) {
+ 			float3 envColorBase = Color::SkyrimGammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
  			envColor = envColorBase.xyz * envMask;
  		}
  	}
@@ -1950,7 +2448,19 @@ index ab34912..51315e9 100644
  
  #	if defined(EXP_HEIGHT_FOG)
  	if (SharedData::exponentialHeightFogSettings.enabled) {
-@@ -2580,6 +2684,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2560,6 +2664,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ #	endif  // MULTI_LAYER_PARALLAX
+ 
+ 	float3 ambientNormal = worldNormal.xyz;
++#	if defined(TREE_ANIM)
++	// Foliage Lighting: mirror the ambient normal for visible backside foliage cards.
++	[branch] if (SharedData::foliageLightingSettings.EnableFoliageAmbientFlip != 0)
++		ambientNormal *= dot(ambientNormal, viewDirection) < 0 ? -1 : 1;
++#	endif
+ #	if defined(HAIR) && defined(CS_HAIR)
+ 	if (SharedData::hairSpecularSettings.Enabled) {
+ 		if (SharedData::hairSpecularSettings.HairMode == 1)
+@@ -2580,6 +2689,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	}
  #	endif
  
@@ -1961,7 +2471,7 @@ index ab34912..51315e9 100644
  #	if defined(LANDSCAPE)
  	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
  		input.Color.xyz = 1;
-@@ -2673,7 +2781,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2673,7 +2786,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		endif
  #	endif
  #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -1973,7 +2483,7 @@ index ab34912..51315e9 100644
  #	endif
  
  #	if defined(SPECULAR) && !defined(TRUE_PBR)
-@@ -2716,12 +2827,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2716,12 +2832,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		if defined(DYNAMIC_CUBEMAPS)
  	if (!dynamicCubemap)
  #		endif
@@ -1994,7 +2504,7 @@ index ab34912..51315e9 100644
  #	endif  // defined (EMAT) && defined(ENVMAP)
  
  #	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
-@@ -2970,7 +3087,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2970,7 +3092,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  
  	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
  	psout.Specular = float4(specularColor, psout.Diffuse.w);
@@ -2007,7 +2517,7 @@ index ab34912..51315e9 100644
  
  #		if defined(WETNESS_EFFECTS)
  	indirectLobeWeights.specular += wetnessReflectance;
-@@ -2982,7 +3104,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2982,7 +3109,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		endif
  
  	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
@@ -2043,7 +2553,7 @@ index ab34912..51315e9 100644
  
  #		if defined(SNOW)
  #			if defined(TRUE_PBR)
-@@ -2992,7 +3141,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2992,7 +3146,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
  #			endif
  	psout.Parameters.w = psout.Diffuse.w;
@@ -2052,7 +2562,7 @@ index ab34912..51315e9 100644
  
  	float masksZ = Color::RGBToYCoCg(directionalAmbientColor).x;
  
-@@ -3002,13 +3151,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -3002,13 +3156,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
  #		endif
  
@@ -2075,10 +2585,18 @@ index ab34912..51315e9 100644
  #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
  	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
 diff --git a/package/Shaders/RunGrass.hlsl b/package/Shaders/RunGrass.hlsl
-index fb3fdb8..62ae904 100644
+index fb3fdb8..c18c0ab 100644
 --- a/package/Shaders/RunGrass.hlsl
 +++ b/package/Shaders/RunGrass.hlsl
-@@ -598,7 +598,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -396,6 +396,7 @@ cbuffer PerMaterial : register(b1)
+ #			include "Common/LightingEval.hlsli"
+ #		endif
+ #		include "GrassLighting/GrassLighting.hlsli"
++#		include "Common/FoliageTransmission.hlsli"
+ 
+ float GetSoftLightMultiplier(float angle, float rolloff)
+ {
+@@ -598,7 +599,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Specular = float4(totalLighting.specular, 1);
  	psout.Reflectance = float4(indirectLobes.specular, 1);
  	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
@@ -2091,6 +2609,57 @@ index fb3fdb8..62ae904 100644
  	return psout;
  #			endif
  }
+@@ -746,6 +752,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
+ 
+ 	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
++	// Foliage Lighting (ported from Open Shaders): view-dependent grass transmission.
++	[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
++		lightsDiffuseColor += dirLightColor * dirDetailedShadow * GetFoliageTransmission(dirLightAngle, dot(viewDirection, SharedData::DirLightDirection.xyz)) * Color::VanillaNormalization();
+ 
+ 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
+ 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+@@ -825,6 +834,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 				float3 lightDiffuseColor;
+ 
+ 				lightDiffuseColor = lightColor * saturate(lightAngle);
++				[branch] if (SharedData::foliageLightingSettings.EnableGrassScattering != 0)
++					lightDiffuseColor += lightColor * GetFoliageTransmission(lightAngle, dot(viewDirection, normalizedLightDirection));
+ 
+ 				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
+ 
+diff --git a/package/Shaders/Sky.hlsl b/package/Shaders/Sky.hlsl
+index ec80a86..8f1472d 100644
+--- a/package/Shaders/Sky.hlsl
++++ b/package/Shaders/Sky.hlsl
+@@ -162,6 +162,12 @@ cbuffer AlphaTestRefCB : register(b11)
+ #	include "Common/MotionBlur.hlsli"
+ #	include "Common/SharedData.hlsli"
+ 
++#	if defined(CLOUD_RELIGHT) && defined(CLOUD_SHADOWS) && defined(TEX) && defined(CLOUDS)
++#		define CR_CLOUDS
++#		include "CloudShadows/CloudShadows.hlsli"
++#		include "CloudRelight/CloudRelight.hlsli"
++#	endif
++
+ #	if defined(EXP_HEIGHT_FOG)
+ #		define SampColorSampler SampBaseSampler
+ #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+@@ -210,6 +216,14 @@ PS_OUTPUT main(PS_INPUT input)
+ 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
+ #		endif
+ 
++#		if defined(CR_CLOUDS)
++	// Cloud Relight (ported from Open Shaders): sun/moon lighting, self-shadow, silver lining.
++	if (SharedData::cloudRelightSettings.enabled) {
++		float3 viewDir = normalize(input.WorldPosition.xyz);
++		baseColor.rgb = CloudRelight::RelightCloud(baseColor, viewDir, SampBaseSampler);
++	}
++#		endif
++
+ #		if defined(HDR_OUTPUT)
+ 	float hdrSunGain = HDRSun::GetHdrSunGain(input.TexCoord0.xy, baseColor);
+ 	baseColor.xyz *= hdrSunGain;
 diff --git a/src/DX12Interop.cpp b/src/DX12Interop.cpp
 new file mode 100644
 index 0000000..a38be4f
@@ -2848,10 +3417,19 @@ index f53d621..5a9c391 100644
  			defines.push_back({ "IBL", nullptr });
  
 diff --git a/src/Feature.cpp b/src/Feature.cpp
-index d9448a2..1f768dc 100644
+index d9448a2..9f8c27f 100644
 --- a/src/Feature.cpp
 +++ b/src/Feature.cpp
-@@ -23,7 +23,9 @@
+@@ -4,6 +4,8 @@
+ #include "FeatureVersions.h"
+ #include "Features/CSEditor.h"
+ #include "Features/CloudShadows.h"
++#include "Features/CloudRelight.h"
++#include "Features/FoliageLighting.h"
+ #include "Features/DynamicCubemaps.h"
+ #include "Features/Effects11.h"
+ #include "Features/ExponentialHeightFog.h"
+@@ -23,7 +25,9 @@
  #include "Features/LinearLighting.h"
  #include "Features/PerformanceOverlay.h"
  #include "Features/RemoteControl.h"
@@ -2861,7 +3439,7 @@ index d9448a2..1f768dc 100644
  #include "Features/ScreenSpaceGI.h"
  #include "Features/ScreenSpaceShadows.h"
  #include "Features/ScreenshotFeature.h"
-@@ -37,6 +39,7 @@
+@@ -37,6 +41,7 @@
  #include "Features/TerrainVariation.h"
  #include "Features/UnifiedWater.h"
  #include "Features/Upscaling.h"
@@ -2869,7 +3447,16 @@ index d9448a2..1f768dc 100644
  #include "Features/VolumetricLighting.h"
  #include "Features/VolumetricShadows.h"
  #include "Features/WaterEffects.h"
-@@ -240,6 +243,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
+@@ -231,6 +236,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
+ 		&globals::features::lightLimitFix,
+ 		&globals::features::dynamicCubemaps,
+ 		&globals::features::cloudShadows,
++		&globals::features::cloudRelight,
++		&globals::features::foliageLighting,
+ 		&globals::features::waterEffects,
+ 		&globals::features::performanceOverlay,
+ 		&globals::features::subsurfaceScattering,
+@@ -240,6 +247,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
  		&globals::features::skySync,
  		&globals::features::terrainBlending,
  		&globals::features::terrainHelper,
@@ -2877,7 +3464,7 @@ index d9448a2..1f768dc 100644
  		&globals::features::volumetricLighting,
  		&globals::features::lodBlending,
  		&globals::features::inverseSquareLighting,
-@@ -251,6 +255,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
+@@ -251,6 +259,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
  		&globals::features::upscaling,
  		&globals::features::renderDoc,
  		&globals::features::remoteControl,
@@ -2887,10 +3474,24 @@ index d9448a2..1f768dc 100644
  		&globals::features::screenshotFeature,
  		&globals::features::linearLighting,
 diff --git a/src/FeatureBuffer.cpp b/src/FeatureBuffer.cpp
-index 73aac7c..c1ef579 100644
+index 73aac7c..30602ab 100644
 --- a/src/FeatureBuffer.cpp
 +++ b/src/FeatureBuffer.cpp
-@@ -14,11 +14,13 @@
+@@ -2,23 +2,27 @@
+ 
+ #include <array>
+ 
++#include "Features/CloudRelight.h"
+ #include "Features/CloudShadows.h"
+ #include "Features/DynamicCubemaps.h"
+ #include "Features/Effects11.h"
+ #include "Features/ExponentialHeightFog.h"
+ #include "Features/ExtendedMaterials.h"
+ #include "Features/ExtendedTranslucency.h"
++#include "Features/FoliageLighting.h"
+ #include "Features/GrassLighting.h"
+ #include "Features/HairSpecular.h"
+ #include "Features/IBL.h"
  #include "Features/LODBlending.h"
  #include "Features/LightLimitFix.h"
  #include "Features/LinearLighting.h"
@@ -2904,7 +3505,7 @@ index 73aac7c..c1ef579 100644
  #include "Features/WetnessEffects.h"
  #include "TruePBR.h"
  
-@@ -61,6 +63,8 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
+@@ -61,6 +65,10 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
  		globals::features::effects11.GetCommonBufferData(),
  		globals::features::terrainBlending.settings,
  		globals::features::exponentialHeightFog.GetCommonBufferData(),
@@ -2914,8 +3515,179 @@ index 73aac7c..c1ef579 100644
 -}
 \ No newline at end of file
 +		globals::features::skin.GetCommonBufferData(),
-+		globals::features::vanillaFresnel.settings);
++		globals::features::vanillaFresnel.settings,
++		globals::features::cloudRelight.GetCommonBufferData(),
++		globals::features::foliageLighting.GetCommonBufferData());
 +}
+diff --git a/src/Features/CloudRelight.cpp b/src/Features/CloudRelight.cpp
+new file mode 100644
+index 0000000..14d5892
+--- /dev/null
++++ b/src/Features/CloudRelight.cpp
+@@ -0,0 +1,91 @@
++// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
++// dev de960167, adapted to Community Shaders 1.9.
++
++#include "CloudRelight.h"
++
++#include "../I18n/I18n.h"
++#include "CloudShadows.h"
++#include "Globals.h"
++
++#define I18N_KEY_PREFIX "feature.cloud_relight."
++
++NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
++	CloudRelight::Settings,
++	enabled,
++	cloudRelightMix,
++	cloudOriginalMix,
++	silverLiningMix,
++	silverLiningSpread)
++
++namespace
++{
++	void ClampSettings(CloudRelight::Settings& settings)
++	{
++		settings.cloudRelightMix = std::clamp(settings.cloudRelightMix, 0.0f, 2.0f);
++		settings.cloudOriginalMix = std::clamp(settings.cloudOriginalMix, 0.0f, 2.0f);
++		settings.silverLiningMix = std::clamp(settings.silverLiningMix, 0.0f, 1.0f);
++		settings.silverLiningSpread = std::clamp(settings.silverLiningSpread, -0.99f, 0.99f);
++	}
++}
++
++void CloudRelight::DrawSettings()
++{
++	bool enable = settings.enabled != 0;
++	if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &enable))
++		settings.enabled = enable;
++
++	ImGui::SeparatorText(T(TKEY("cloud_relighting"), "Cloud Relighting"));
++
++	ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.cloudOriginalMix, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
++	if (auto _tt = Util::HoverTooltipWrapper())
++		ImGui::Text("%s", T(TKEY("vanilla_mix_tooltip"), "Multiplier on the original vanilla cloud color before relighting is applied."));
++
++	ImGui::SliderFloat(T(TKEY("relight_mix"), "Relight Mix"), &settings.cloudRelightMix, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
++	if (auto _tt = Util::HoverTooltipWrapper())
++		ImGui::Text("%s", T(TKEY("relight_mix_tooltip"), "Multiplier on the directional light contribution added to clouds."));
++
++	ImGui::SeparatorText(T(TKEY("silver_lining"), "Silver Lining"));
++
++	ImGui::SliderFloat(T(TKEY("silver_lining_accent"), "Silver Lining Accent"), &settings.silverLiningMix, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
++	if (auto _tt = Util::HoverTooltipWrapper())
++		ImGui::Text("%s", T(TKEY("silver_lining_accent_tooltip"), "Strength of the broad glow and sharp silver lining added to the cloud body. Does not reduce body lighting."));
++
++	ImGui::SliderFloat(T(TKEY("silver_lining_spread"), "Silver Lining Spread"), &settings.silverLiningSpread, -0.99f, 0.99f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
++	if (auto _tt = Util::HoverTooltipWrapper())
++		ImGui::Text("%s", T(TKEY("silver_lining_spread_tooltip"),
++							  "Positive: silver lining spreads into thicker cloud areas.\n"
++							  "Negative: silver lining is confined to thinner cloud edges."));
++
++	if (!globals::features::cloudShadows.loaded) {
++		ImGui::Spacing();
++		ImGui::TextWrapped("%s", T(TKEY("cloud_shadows_required"), "Cloud self-shadowing requires Cloud Shadows to be installed and enabled."));
++	}
++}
++
++#undef I18N_KEY_PREFIX
++
++void CloudRelight::LoadSettings(json& o_json)
++{
++	settings = o_json;
++	ClampSettings(settings);
++}
++
++void CloudRelight::SaveSettings(json& o_json)
++{
++	o_json = settings;
++}
++
++void CloudRelight::RestoreDefaultSettings()
++{
++	settings = {};
++}
++
++CloudRelight::Settings CloudRelight::GetCommonBufferData() const
++{
++	auto data = settings;
++	ClampSettings(data);
++	// Ported from Open Shaders. Our Sky Sync has no celestial light weights, so clouds are
++	// relit by the engine directional light (sun or moon), as in Open Shaders without Sky Sync.
++	data.celestialLightWeights = DirectionalLightFallbackWeights;
++	return data;
++}
+diff --git a/src/Features/CloudRelight.h b/src/Features/CloudRelight.h
+new file mode 100644
+index 0000000..68ffdd7
+--- /dev/null
++++ b/src/Features/CloudRelight.h
+@@ -0,0 +1,66 @@
++#pragma once
++
++// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
++// dev de960167, adapted to Community Shaders 1.9.
++
++/** @brief Relights vanilla clouds from the active directional light. */
++struct CloudRelight : Feature
++{
++	/** @brief Selects the engine directional light when celestial source weights are unavailable. */
++	static constexpr float3 DirectionalLightFallbackWeights = { -1.0f, 0.0f, 0.0f };
++
++	/** @brief Per-frame Cloud Relight settings shared with HLSL. */
++	struct alignas(16) Settings
++	{
++		uint enabled = true;
++		float cloudRelightMix = 1.0f;
++		float cloudOriginalMix = 0.68f;
++		float silverLiningMix = 1.0f;
++
++		float silverLiningSpread = 0.0f;
++		float3 celestialLightWeights = DirectionalLightFallbackWeights;
++	};
++	STATIC_ASSERT_ALIGNAS_16(Settings);
++	static_assert(sizeof(Settings) == 32);
++	static_assert(offsetof(Settings, celestialLightWeights) == 20);
++
++	Settings settings;
++
++	/** @brief Returns the stable feature name. */
++	virtual inline std::string GetName() override { return "Cloud Relight"; }
++	/** @brief Returns the localized feature name. */
++	virtual std::string GetDisplayName() override { return T("feature.cloud_relight.name", "Cloud Relight"); }
++	/** @brief Returns the shader configuration name. */
++	virtual inline std::string GetShortName() override { return "CloudRelight"; }
++	/** @brief Returns the menu category. */
++	virtual std::string_view GetCategory() const override { return FeatureCategories::kSky; }
++	/** @brief Returns the shader permutation define. */
++	virtual inline std::string_view GetShaderDefineName() override { return "CLOUD_RELIGHT"; }
++	/** @brief Enables the feature define for sky shaders. */
++	virtual inline bool HasShaderDefine(RE::BSShader::Type shaderType) override { return shaderType == RE::BSShader::Type::Sky; }
++	/** @brief Reports VR support. */
++	virtual bool SupportsVR() override { return true; }
++
++	/** @brief Returns the localized feature summary. */
++	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
++	{
++		return {
++			T("feature.cloud_relight.description", "Relights vanilla cloud textures using the active directional light, cloud self-shadowing, and silver-lining phase lighting."),
++			{ T("feature.cloud_relight.key_feature_1", "Vanilla cloud color and relit cloud color blending"),
++				T("feature.cloud_relight.key_feature_2", "Silver-lining and forward-scattering phase lighting"),
++				T("feature.cloud_relight.key_feature_3", "Directional cloud self-shadowing from the active sun or moon") }
++		};
++	}
++
++	/** @brief Draws Cloud Relight settings. */
++	virtual void DrawSettings() override;
++	/** @brief Loads and validates Cloud Relight settings. */
++	virtual void LoadSettings(json& o_json) override;
++	/** @brief Saves Cloud Relight settings. */
++	virtual void SaveSettings(json& o_json) override;
++	/** @brief Restores default Cloud Relight settings. */
++	virtual void RestoreDefaultSettings() override;
++
++	/** @brief Returns the settings uploaded to the shared feature buffer. */
++	Settings GetCommonBufferData() const;
++};
 diff --git a/src/Features/CloudShadows.h b/src/Features/CloudShadows.h
 index fa870c3..a7ca1d9 100644
 --- a/src/Features/CloudShadows.h
@@ -2952,6 +3724,172 @@ index c095b22..f37675c 100644
  
  	// Settings only in CPU
  	struct Settings : PerFrame
+diff --git a/src/Features/FoliageLighting.cpp b/src/Features/FoliageLighting.cpp
+new file mode 100644
+index 0000000..ad67503
+--- /dev/null
++++ b/src/Features/FoliageLighting.cpp
+@@ -0,0 +1,100 @@
++// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
++// dev de960167, adapted to Community Shaders 1.9.
++
++#include "FoliageLighting.h"
++
++#include <algorithm>
++
++#include "../I18n/I18n.h"
++#include "../Util.h"
++#include "../Utils/UI.h"
++
++#define I18N_KEY_PREFIX "feature.foliage_lighting."
++
++NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
++	FoliageLighting::Settings,
++	Enable,
++	EnableFoliageScattering,
++	EnableFoliageAmbientBoost,
++	EnableFoliageAmbientFlip,
++	FoliageAmbientAmount,
++	EnableGrassScattering);
++
++void FoliageLighting::DrawSettings()
++{
++	bool enable = settings.Enable != 0;
++	if (ImGui::Checkbox(T(TKEY("master_enabled"), "Enable Foliage Lighting"), &enable))
++		settings.Enable = enable;
++	if (auto tooltip = Util::HoverTooltipWrapper())
++		ImGui::TextUnformatted(T(TKEY("master_enabled_tip"), "Enables tree and grass scattering and tree ambient controls. All other settings are ignored when disabled."));
++	ImGui::Indent();
++	auto enabledGuard = Util::DisableGuard(!settings.Enable);
++
++	bool enableFoliageScattering = settings.EnableFoliageScattering != 0;
++	if (ImGui::Checkbox(T(TKEY("enable_foliage_scattering"), "Tree Foliage Scattering"), &enableFoliageScattering)) {
++		settings.EnableFoliageScattering = enableFoliageScattering;
++	}
++	if (auto _tt = Util::HoverTooltipWrapper()) {
++		ImGui::Text("%s", T(TKEY("enable_foliage_scattering_tooltip"), "Adds wrapped, view-dependent transmission to animated tree foliage."));
++	}
++
++	bool enableGrassScattering = settings.EnableGrassScattering != 0;
++	if (ImGui::Checkbox(T(TKEY("enable_grass_scattering"), "Grass Scattering"), &enableGrassScattering)) {
++		settings.EnableGrassScattering = enableGrassScattering;
++	}
++	if (auto _tt = Util::HoverTooltipWrapper()) {
++		ImGui::Text("%s", T(TKEY("enable_grass_scattering_tooltip"), "Adds wrapped, view-dependent transmission to non-PBR grass lighting."));
++	}
++
++	bool enableFoliageAmbientBoost = settings.EnableFoliageAmbientBoost != 0;
++	if (ImGui::Checkbox(T(TKEY("enable_foliage_ambient_boost"), "Tree Ambient Boost"), &enableFoliageAmbientBoost)) {
++		settings.EnableFoliageAmbientBoost = enableFoliageAmbientBoost;
++	}
++	if (auto _tt = Util::HoverTooltipWrapper()) {
++		ImGui::Text("%s", T(TKEY("enable_foliage_ambient_boost_tooltip"), "Adds the additive indirect ambient term to animated PBR foliage only."));
++	}
++
++	bool enableFoliageAmbientFlip = settings.EnableFoliageAmbientFlip != 0;
++	if (ImGui::Checkbox(T(TKEY("enable_foliage_ambient_flip"), "Tree Ambient Backface Flip"), &enableFoliageAmbientFlip)) {
++		settings.EnableFoliageAmbientFlip = enableFoliageAmbientFlip;
++	}
++	if (auto _tt = Util::HoverTooltipWrapper()) {
++		ImGui::Text("%s", T(TKEY("enable_foliage_ambient_flip_tooltip"), "Mirrors the ambient sampling normal for visible backside tree foliage cards."));
++	}
++
++	ImGui::SliderFloat(T(TKEY("foliage_ambient_amount"), "Tree Ambient Amount"), &settings.FoliageAmbientAmount, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
++	if (auto _tt = Util::HoverTooltipWrapper()) {
++		ImGui::Text("%s", T(TKEY("foliage_ambient_amount_tooltip"), "Amount added to the diffuse indirect ambient response for animated trees."));
++	}
++	ImGui::Unindent();
++}
++
++void FoliageLighting::SaveSettings(json& o_json)
++{
++	o_json = settings;
++}
++
++void FoliageLighting::LoadSettings(json& o_json)
++{
++	settings = o_json;
++	settings.FoliageAmbientAmount = std::clamp(settings.FoliageAmbientAmount, 0.0f, 1.0f);
++}
++
++void FoliageLighting::RestoreDefaultSettings()
++{
++	settings = {};
++}
++
++FoliageLighting::Settings FoliageLighting::GetCommonBufferData() const
++{
++	auto data = settings;
++	if (!settings.Enable) {
++		data.EnableFoliageScattering = 0;
++		data.EnableFoliageAmbientBoost = 0;
++		data.EnableFoliageAmbientFlip = 0;
++		data.EnableGrassScattering = 0;
++	}
++	return data;
++}
++
++#undef I18N_KEY_PREFIX
+diff --git a/src/Features/FoliageLighting.h b/src/Features/FoliageLighting.h
+new file mode 100644
+index 0000000..019a51e
+--- /dev/null
++++ b/src/Features/FoliageLighting.h
+@@ -0,0 +1,54 @@
++#pragma once
++
++// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
++// dev de960167, adapted to Community Shaders 1.9.
++
++/** @brief Exposes the shared tree and grass foliage lighting controls. */
++struct FoliageLighting : Feature
++{
++	struct alignas(16) Settings
++	{
++		uint EnableFoliageScattering = 1;
++		uint EnableFoliageAmbientBoost = 0;
++		uint EnableFoliageAmbientFlip = 1;
++		float FoliageAmbientAmount = 0.25f;
++		uint EnableGrassScattering = 1;
++		uint Enable = 1;  // on by default (plug-and-play), Open Shaders ships it off
++		uint pad[2];
++	};
++	STATIC_ASSERT_ALIGNAS_16(Settings);
++	static_assert(offsetof(Settings, EnableFoliageAmbientBoost) == sizeof(uint));
++	static_assert(offsetof(Settings, EnableFoliageAmbientFlip) == sizeof(uint) * 2);
++	static_assert(offsetof(Settings, FoliageAmbientAmount) == sizeof(uint) * 3);
++	static_assert(offsetof(Settings, EnableGrassScattering) == sizeof(uint) * 4);
++	static_assert(offsetof(Settings, Enable) == sizeof(uint) * 5);
++	static_assert(sizeof(Settings) == 32);
++
++	virtual std::string GetName() override { return "Foliage Lighting"; }
++	virtual std::string GetDisplayName() override { return T("feature.foliage_lighting.name", "Foliage Lighting"); }
++	virtual std::string GetShortName() override { return "FoliageLighting"; }
++	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
++	virtual bool IsCore() const override { return true; }
++	virtual bool SupportsVR() override { return true; }
++
++	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
++	{
++		return { T("feature.foliage_lighting.description", "Adds inexpensive transmission and ambient controls for animated foliage."),
++			{ T("feature.foliage_lighting.key_feature_1", "View-dependent foliage transmission"),
++				T("feature.foliage_lighting.key_feature_2", "Tree backside ambient controls"),
++				T("feature.foliage_lighting.key_feature_3", "Independent grass scattering toggle") } };
++	}
++
++	/** @brief Draws the shared tree and grass foliage lighting controls. */
++	virtual void DrawSettings() override;
++	/** @brief Serializes foliage lighting settings. */
++	virtual void SaveSettings(json& o_json) override;
++	/** @brief Loads foliage lighting settings. */
++	virtual void LoadSettings(json& o_json) override;
++	/** @brief Restores default foliage lighting settings. */
++	virtual void RestoreDefaultSettings() override;
++	/** @brief Returns shader settings with foliage lighting disabled by the master toggle. */
++	Settings GetCommonBufferData() const;
++
++	Settings settings;
++};
 diff --git a/src/Features/HairSpecular.h b/src/Features/HairSpecular.h
 index 546b80d..8a21786 100644
 --- a/src/Features/HairSpecular.h
@@ -7906,19 +8844,22 @@ index 0000000..eb06eae
 +	Settings settings;
 +};
 diff --git a/src/Globals.cpp b/src/Globals.cpp
-index 67642e5..4181245 100644
+index 67642e5..fdc2a61 100644
 --- a/src/Globals.cpp
 +++ b/src/Globals.cpp
-@@ -1,6 +1,8 @@
+@@ -1,7 +1,11 @@
  #include "Globals.h"
  
 +#include "DX12Interop.h"
  #include "Deferred.h"
 +#include "Features/CSEditor.h"
  #include "Features/CloudShadows.h"
++#include "Features/CloudRelight.h"
++#include "Features/FoliageLighting.h"
  #include "Features/DynamicCubemaps.h"
  #include "Features/Effects11.h"
-@@ -21,7 +23,9 @@
+ #include "Features/ExponentialHeightFog.h"
+@@ -21,7 +25,9 @@
  #include "Features/LinearLighting.h"
  #include "Features/PerformanceOverlay.h"
  #include "Features/RemoteControl.h"
@@ -7928,7 +8869,7 @@ index 67642e5..4181245 100644
  #include "Features/ScreenSpaceGI.h"
  #include "Features/ScreenSpaceShadows.h"
  #include "Features/ScreenshotFeature.h"
-@@ -35,10 +39,10 @@
+@@ -35,10 +41,10 @@
  #include "Features/TerrainVariation.h"
  #include "Features/UnifiedWater.h"
  #include "Features/Upscaling.h"
@@ -7940,7 +8881,16 @@ index 67642e5..4181245 100644
  #include "Features/WetnessEffects.h"
  #include "Menu.h"
  #include "SceneSettingsManager.h"
-@@ -84,6 +88,7 @@ namespace globals
+@@ -60,6 +66,8 @@ namespace globals
+ 	namespace features
+ 	{
+ 		CloudShadows cloudShadows{};
++		CloudRelight cloudRelight{};
++		FoliageLighting foliageLighting{};
+ 		DynamicCubemaps dynamicCubemaps{};
+ 		VolumetricShadows volumetricShadows{};
+ 		ExtendedMaterials extendedMaterials{};
+@@ -84,6 +92,7 @@ namespace globals
  		TerrainHelper terrainHelper{};
  		TerrainShadows terrainShadows{};
  		UnifiedWater unifiedWater{};
@@ -7948,7 +8898,7 @@ index 67642e5..4181245 100644
  		VolumetricLighting volumetricLighting{};
  		WaterEffects waterEffects{};
  		PerformanceOverlay performanceOverlay{};
-@@ -97,6 +102,8 @@ namespace globals
+@@ -97,6 +106,8 @@ namespace globals
  		ScreenshotFeature screenshotFeature{};
  		CSEditor csEditor{};
  		ExponentialHeightFog exponentialHeightFog{};
@@ -7957,7 +8907,7 @@ index 67642e5..4181245 100644
  		TruePBR truePBR{};
  		Skin skin{};
  
-@@ -169,6 +176,7 @@ namespace globals
+@@ -169,6 +180,7 @@ namespace globals
  	SIE::ShaderCache* shaderCache = nullptr;
  	WeatherManager* weatherManager = nullptr;
  	SceneSettingsManager* sceneSettingsManager = nullptr;
@@ -7965,7 +8915,7 @@ index 67642e5..4181245 100644
  
  	static Profiler profilerInstance;
  	Profiler* profiler = &profilerInstance;
-@@ -181,6 +189,7 @@ namespace globals
+@@ -181,6 +193,7 @@ namespace globals
  		deferred = Deferred::GetSingleton();
  		weatherManager = WeatherManager::GetSingleton();
  		sceneSettingsManager = SceneSettingsManager::GetSingleton();
@@ -7974,18 +8924,20 @@ index 67642e5..4181245 100644
  
  	void ReInit()
 diff --git a/src/Globals.h b/src/Globals.h
-index 5a13a4a..b679851 100644
+index 5a13a4a..c8515f2 100644
 --- a/src/Globals.h
 +++ b/src/Globals.h
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,9 @@
  #include <atomic>
  
  struct CloudShadows;
++struct CloudRelight;
++struct FoliageLighting;
 +struct DX12Interop;
  struct DynamicCubemaps;
  struct VolumetricShadows;
  struct ExtendedMaterials;
-@@ -27,6 +28,7 @@ struct TerrainBlending;
+@@ -27,6 +30,7 @@ struct TerrainBlending;
  struct TerrainHelper;
  struct TerrainShadows;
  struct UnifiedWater;
@@ -7993,7 +8945,7 @@ index 5a13a4a..b679851 100644
  struct VolumetricLighting;
  struct WaterEffects;
  struct PerformanceOverlay;
-@@ -36,6 +38,8 @@ struct Upscaling;
+@@ -36,6 +40,8 @@ struct Upscaling;
  class Profiler;
  struct CSEditor;
  struct Effects11;
@@ -8002,7 +8954,16 @@ index 5a13a4a..b679851 100644
  struct ExponentialHeightFog;
  struct HDRDisplay;
  struct ScreenshotFeature;
-@@ -117,6 +121,7 @@ namespace globals
+@@ -93,6 +99,8 @@ namespace globals
+ 	namespace features
+ 	{
+ 		extern CloudShadows cloudShadows;
++		extern CloudRelight cloudRelight;
++		extern FoliageLighting foliageLighting;
+ 		extern DynamicCubemaps dynamicCubemaps;
+ 		extern VolumetricShadows volumetricShadows;
+ 		extern ExtendedMaterials extendedMaterials;
+@@ -117,6 +125,7 @@ namespace globals
  		extern TerrainHelper terrainHelper;
  		extern TerrainShadows terrainShadows;
  		extern UnifiedWater unifiedWater;
@@ -8010,7 +8971,7 @@ index 5a13a4a..b679851 100644
  		extern VolumetricLighting volumetricLighting;
  		extern WaterEffects waterEffects;
  		extern PerformanceOverlay performanceOverlay;
-@@ -130,6 +135,8 @@ namespace globals
+@@ -130,6 +139,8 @@ namespace globals
  		extern ScreenshotFeature screenshotFeature;
  		extern CSEditor csEditor;
  		extern ExponentialHeightFog exponentialHeightFog;
@@ -8019,7 +8980,7 @@ index 5a13a4a..b679851 100644
  		extern TruePBR truePBR;
  		extern Skin skin;
  
-@@ -247,6 +254,7 @@ namespace globals
+@@ -247,6 +258,7 @@ namespace globals
  	extern Deferred* deferred;
  	extern Menu* menu;
  	extern SIE::ShaderCache* shaderCache;
@@ -8027,7 +8988,7 @@ index 5a13a4a..b679851 100644
  	extern Profiler* profiler;
  	extern WeatherManager* weatherManager;
  	extern SceneSettingsManager* sceneSettingsManager;
-@@ -264,4 +272,4 @@ namespace globals
+@@ -264,4 +276,4 @@ namespace globals
  	 * @param a_context The D3D11 device context to hook.
  	 */
  	void InstallD3DHooks(ID3D11DeviceContext* a_context);
