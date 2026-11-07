@@ -3629,10 +3629,10 @@ index 0000000..14d5892
 +}
 diff --git a/src/Features/CloudRelight.h b/src/Features/CloudRelight.h
 new file mode 100644
-index 0000000..68ffdd7
+index 0000000..b55cd93
 --- /dev/null
 +++ b/src/Features/CloudRelight.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,64 @@
 +#pragma once
 +
 +// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
@@ -3673,8 +3673,6 @@ index 0000000..68ffdd7
 +	virtual inline std::string_view GetShaderDefineName() override { return "CLOUD_RELIGHT"; }
 +	/** @brief Enables the feature define for sky shaders. */
 +	virtual inline bool HasShaderDefine(RE::BSShader::Type shaderType) override { return shaderType == RE::BSShader::Type::Sky; }
-+	/** @brief Reports VR support. */
-+	virtual bool SupportsVR() override { return true; }
 +
 +	/** @brief Returns the localized feature summary. */
 +	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -3843,10 +3841,10 @@ index 0000000..ad67503
 +#undef I18N_KEY_PREFIX
 diff --git a/src/Features/FoliageLighting.h b/src/Features/FoliageLighting.h
 new file mode 100644
-index 0000000..019a51e
+index 0000000..d5d9080
 --- /dev/null
 +++ b/src/Features/FoliageLighting.h
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,53 @@
 +#pragma once
 +
 +// Ported from Open Shaders (https://github.com/alandtse/open-shaders, GPL-3.0-or-later),
@@ -3878,7 +3876,6 @@ index 0000000..019a51e
 +	virtual std::string GetShortName() override { return "FoliageLighting"; }
 +	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 +	virtual bool IsCore() const override { return true; }
-+	virtual bool SupportsVR() override { return true; }
 +
 +	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 +	{
