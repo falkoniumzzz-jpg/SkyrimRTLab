@@ -95,6 +95,24 @@ mitgeliefert: Lichter nutzen den Vanilla-Abfall, im Raster und im RT.
    *Disable at Boot* steht Inverse Square Lighting nicht mehr in der Liste der geladenen
    Features (`CommunityShaders.log`: „InverseSquareLighting.ini failed to load“).
 
+## Neu: Modus „RT AO“ und Name „Falkos Lichtspiel“
+
+**Status:** implementiert. Gebaut erst, wenn der CI-Lauf grün ist. **Im Spiel noch nicht bestätigt.**
+
+- **RT AO:** neuer Modus unter *Raytracing → Mode*. Licht, Schatten, Ambient und Spiegelungen bleiben
+  Raster wie ohne RT. Nur die Umgebungsverdeckung (Ecken, unter Möbeln, Kontaktschatten, unter Bäumen)
+  kommt aus kurzen Strahlen (ca. 1 m). Ersetzt Vanilla-SSAO, eigener Entrauscher (die Denoiser-Wahl gilt hier nicht).
+- **Menü:** Titel, Startseite, natives Menü und Meldungen heißen jetzt „Falkos Lichtspiel“.
+  DLL-, Ordner- und Einstellungsnamen bleiben, deine Presets laufen weiter.
+- „RT Lichter“ und „RT Lichter + AO“ kommen in der nächsten Runde.
+
+Test:
+1. Modus **RT AO** wählen. Innenraum (z. B. Drachenfeste) und Wald bei Tag.
+2. Ecken, Fußleisten, unter Tischen und Bäumen sollten weich abdunkeln, ohne Rauschen und ohne Halos an Kanten.
+3. Kamera schnell drehen: kurzes Nachziehen an freigelegten Stellen ist normal, dauerhaftes Schmieren nicht.
+4. FPS im Vergleich zu „None“ notieren (erwartet: wenige Prozent weniger).
+5. Hauptmenü öffnen: Steht überall „Falkos Lichtspiel“?
+
 ## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
 
 1. Drücke **Strg+Umschalt+F12**, solange das Spiel hängt. Crash Logger schreibt dann

@@ -1,0 +1,667 @@
+diff --git a/shaders/AOFilter.hlsl b/shaders/AOFilter.hlsl
+new file mode 100644
+index 0000000..41c52ea
+--- /dev/null
++++ b/shaders/AOFilter.hlsl
+@@ -0,0 +1,72 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: edge-aware spatial filter for the raytraced AO history.
++// Writes the final AO (1 = open) to the shared main texture for the raster composite.
++
++#include "interop/CameraData.hlsli"
++
++ConstantBuffer<CameraData> Camera       : register(b0);
++
++Texture2D<float4> AOHistory             : register(t0); // x = AO, y = view depth, z = history length
++Texture2D<snorm float4> NormalRoughness : register(t1);
++
++RWTexture2D<float4> Output              : register(u0);
++
++static const float kFadeStart = 5000.0f; // view depth where AO starts fading out
++static const float kFadeEnd   = 8000.0f; // beyond this the BVH lacks LOD detail
++
++[numthreads(8, 8, 1)]
++void Main(uint2 idx : SV_DispatchThreadID)
++{
++    const uint2 size = Camera.RenderSize;
++    if (any(idx >= size))
++        return;
++
++    const float4 center = AOHistory.Load(int3(idx, 0));
++    const float depth0 = center.y;
++
++    if (depth0 <= 0.0f) {
++        Output[idx] = float4(1.0f, 1.0f, 1.0f, 1.0f);
++        return;
++    }
++
++    float3 n0 = NormalRoughness.Load(int3(idx, 0)).xyz;
++    n0 = dot(n0, n0) > 1e-6f ? normalize(n0) : float3(0.0f, 0.0f, 1.0f);
++
++    // Young history (disocclusion) gets a wider footprint.
++    const int stride = center.z < 4.0f ? 2 : 1;
++    const float depthSigma = max(0.02f * depth0, 1e-3f);
++
++    float sum = 0.0f;
++    float weightSum = 0.0f;
++
++    [unroll]
++    for (int y = -2; y <= 2; y++)
++    {
++        [unroll]
++        for (int x = -2; x <= 2; x++)
++        {
++            const int2 p = clamp(int2(idx) + int2(x, y) * stride, int2(0, 0), int2(size) - 1);
++            const float4 s = AOHistory.Load(int3(p, 0));
++            if (s.y <= 0.0f)
++                continue;
++
++            float3 n = NormalRoughness.Load(int3(p, 0)).xyz;
++            n = dot(n, n) > 1e-6f ? normalize(n) : n0;
++
++            const float wSpatial = exp(-0.25f * float(x * x + y * y));
++            const float wDepth = exp(-abs(s.y - depth0) / depthSigma);
++            const float wNormal = pow(saturate(dot(n, n0)), 8.0f);
++            const float w = wSpatial * wDepth * wNormal;
++
++            sum += s.x * w;
++            weightSum += w;
++        }
++    }
++
++    float ao = weightSum > 1e-4f ? sum / weightSum : center.x;
++
++    const float fade = saturate((depth0 - kFadeStart) / (kFadeEnd - kFadeStart));
++    ao = lerp(saturate(ao), 1.0f, fade);
++
++    Output[idx] = float4(ao, ao, ao, 1.0f);
++}
+diff --git a/shaders/raytracing/AmbientOcclusion/RayGeneration.hlsl b/shaders/raytracing/AmbientOcclusion/RayGeneration.hlsl
+new file mode 100644
+index 0000000..f4a29cf
+--- /dev/null
++++ b/shaders/raytracing/AmbientOcclusion/RayGeneration.hlsl
+@@ -0,0 +1,140 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: raytraced ambient occlusion for the raster lighting path.
++// Traces a few short cosine-weighted visibility rays from the raster G-buffer
++// (alpha-tested like the GI shadow rays) and accumulates them over time.
++// Output (history): x = AO (1 = open), y = view depth, z = history length, w = 1.
++
++#include "raytracing/GlobalIllumination/Registers.hlsli"
++
++#include "include/Common.hlsli"
++#include "raytracing/include/Common.hlsli"
++#include "raytracing/include/Payload.hlsli"
++#include "raytracing/include/Geometry.hlsli"
++#include "raytracing/include/Transparency.hlsli"
++
++Texture2D<float4> AOHistoryIn          : register(t21);
++Texture2D<float2> EngineMotionVectors  : register(t22);
++
++#ifndef RAY_FLAGS
++#   define RAY_FLAGS (RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES)
++#endif
++#ifndef INSTANCE_MASK
++#   define INSTANCE_MASK (0xFF)
++#endif
++
++static const uint  kRaysPerPixel   = 2;
++static const float kRadius         = 80.0f;    // game units (~1.1 m)
++static const float kMaxHistory     = 24.0f;
++static const float kDepthTolerance = 0.04f;    // relative view-depth mismatch for reuse
++
++float TraceVisibility(float3 origin, float3 direction, float tmax, inout uint randomSeed)
++{
++    RayDesc ray;
++    ray.Origin = origin;
++    ray.Direction = direction;
++    ray.TMin = 0.0f;
++    ray.TMax = tmax;
++
++    float3 transmission = float3(1.0f, 1.0f, 1.0f);
++
++    RayQuery<RAY_FLAGS | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> rayQuery;
++    rayQuery.TraceRayInline(Scene, RAY_FLAG_NONE, INSTANCE_MASK, ray);
++
++    while (rayQuery.Proceed())
++    {
++        if (rayQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
++        {
++            if (ConsiderTransparentMaterialShadow(
++                rayQuery.CandidateInstanceID(),
++                rayQuery.CandidateGeometryIndex(),
++                rayQuery.CandidatePrimitiveIndex(),
++                rayQuery.CandidateTriangleBarycentrics(),
++                randomSeed,
++                direction,
++                rayQuery.CandidateTriangleRayT(),
++                transmission))
++            {
++                rayQuery.CommitNonOpaqueTriangleHit();
++            }
++        }
++    }
++
++    if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
++        return 0.0f;
++
++    return saturate(dot(transmission, float3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f)));
++}
++
++[numthreads(8, 8, 1)]
++void Main(uint2 idx : SV_DispatchThreadID)
++{
++    const uint2 size = Camera.RenderSize;
++    if (any(idx >= size))
++        return;
++
++    const float depth = Depth.Load(int3(idx, 0));
++    const float depthVS = ScreenToViewDepth(depth, Camera.CameraData);
++
++    [branch]
++    if (depthVS < FP_VIEW_Z || depth >= SKY_Z)
++    {
++        Output[idx] = float4(1.0f, 0.0f, 0.0f, 1.0f);
++        return;
++    }
++
++    const float2 uv = float2(idx + 0.5f) / float2(size);
++    const float3 positionVS = ScreenToViewPosition(uv, depthVS, Camera.NDCToView);
++    const float3 positionCS = ViewToWorldPosition(positionVS, Camera.ViewInverse);
++    const float3 positionWS = positionCS + Camera.Position.xyz;
++
++    float3 normalWS = NormalRoughness.Load(int3(idx, 0)).xyz;
++    normalWS = dot(normalWS, normalWS) > 1e-6f ? normalize(normalWS) : float3(0.0f, 0.0f, 1.0f);
++
++    float3 faceNormal = FaceNormals.Load(int3(idx, 0)) * 2.0f - 1.0f;
++    faceNormal = dot(faceNormal, faceNormal) > 1e-6f ? normalize(faceNormal) : normalWS;
++
++    // Keep the shading normal in the visible hemisphere of the geometric face.
++    if (dot(normalWS, faceNormal) < 0.0f)
++        normalWS = normalize(normalWS - 2.0f * dot(normalWS, faceNormal) * faceNormal);
++
++    // Reconstructed depth is imprecise: offset along the face normal, growing with distance.
++    const float bias = 0.75f + depthVS * 0.0015f;
++    const float3 origin = positionWS + faceNormal * bias;
++
++    uint randomSeed = InitRandomSeed(idx, size, Camera.FrameIndex);
++
++    float visibility = 0.0f;
++    [unroll]
++    for (uint i = 0; i < kRaysPerPixel; i++)
++    {
++        float3 direction = TangentToWorld(normalWS, SampleCosineHemisphere(randomSeed));
++        // Rays grazing below the geometric face would hit the surface itself.
++        if (dot(direction, faceNormal) < 0.05f)
++            direction = normalize(direction + faceNormal * (0.05f - dot(direction, faceNormal)));
++        visibility += TraceVisibility(origin, direction, kRadius, randomSeed);
++    }
++    float ao = visibility / kRaysPerPixel;
++
++    // Temporal accumulation with depth-checked reprojection.
++    const float2 motion = EngineMotionVectors.Load(int3(idx, 0));
++    const float2 prevPixel = float2(idx) + 0.5f + motion * float2(size);
++    float history = 0.0f;
++    float historyAO = 0.0f;
++
++    if (all(prevPixel >= 0.0f) && all(prevPixel < float2(size)))
++    {
++        const float4 prevClip = mul(Camera.PrevViewProj, float4(positionWS - Camera.PositionPrev, 1.0f));
++        const float expectedDepth = prevClip.w;
++        const float4 prev = AOHistoryIn.Load(int3(int2(prevPixel), 0));
++        if (prev.y > 0.0f && abs(prev.y - expectedDepth) <= kDepthTolerance * max(expectedDepth, 1.0f))
++        {
++            history = prev.z;
++            historyAO = prev.x;
++        }
++    }
++
++    history = min(history + 1.0f, kMaxHistory);
++    ao = lerp(historyAO, ao, 1.0f / history);
++
++    Output[idx] = float4(ao, depthVS, history, 1.0f);
++}
+diff --git a/src/API.cpp b/src/API.cpp
+index 1af0979..cc8d4ad 100644
+--- a/src/API.cpp
++++ b/src/API.cpp
+@@ -1,5 +1,5 @@
+ #include "API.h"
+-uint32_t GetShadowLabABI() { return 0x20261031u; }
++uint32_t GetShadowLabABI() { return 0x20261107u; }
+ #include "Scene.h"
+ #include "Renderer.h"
+ #include "Pass/Raytracing/Common/Accumulation.h"
+diff --git a/src/Pass/Raytracing/AmbientOcclusion.cpp b/src/Pass/Raytracing/AmbientOcclusion.cpp
+new file mode 100644
+index 0000000..04ae9a8
+--- /dev/null
++++ b/src/Pass/Raytracing/AmbientOcclusion.cpp
+@@ -0,0 +1,307 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: raytraced ambient occlusion for the raster lighting modes.
++// Pass 1 traces short alpha-tested visibility rays from the raster G-buffer and
++// accumulates them over time (own history, engine motion vectors). Pass 2 applies
++// an edge-aware spatial filter and writes AO to the shared main texture, which the
++// host multiplies into the raster ambient term in its deferred composite.
++#include "AmbientOcclusion.h"
++#include "Renderer.h"
++#include "Scene.h"
++#include "ShaderCache.h"
++#include "ShaderUtils.h"
++#include "Types/InstanceMask.h"
++
++namespace Pass::Raytracing
++{
++	AmbientOcclusion::AmbientOcclusion(Renderer* renderer, SceneTLAS* sceneTLAS)
++		: RenderPass(renderer), m_SceneTLAS(sceneTLAS)
++	{
++		auto device = renderer->GetDevice();
++
++		m_LinearWrapSampler = device->createSampler(
++			nvrhi::SamplerDesc()
++			.setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
++			.setAllFilters(true));
++
++		m_LinearClampSampler = device->createSampler(
++			nvrhi::SamplerDesc()
++			.setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
++			.setAllFilters(true));
++
++		m_PointWrapSampler = device->createSampler(
++			nvrhi::SamplerDesc()
++			.setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
++			.setAllFilters(false));
++
++		m_Supported = device->queryFeatureSupport(nvrhi::Feature::RayQuery);
++		if (!m_Supported)
++			logger::error("FalkosLichtspiel RT AO: inline ray queries (DXR 1.1) are not supported, RT AO stays off");
++
++		m_Defines = BuildDefines(Scene::GetSingleton()->m_Settings);
++
++		m_SceneTLAS->GetTopLevelAS().AddListener(this);
++	}
++
++	eastl::vector<ShaderDefine> AmbientOcclusion::BuildDefines(const Settings& settings) const
++	{
++		auto defines = Util::Shader::GetRaytracingDefines(settings, false, false);
++		defines.emplace_back(L"THREAD_GROUP_SIZE", Constants::GI_DISPATCH_THREADS);
++		// No water in AO (same as GI)
++		auto instanceMask = InstanceMask::All & ~InstanceMask::Water;
++		defines.emplace_back(L"INSTANCE_MASK", instanceMask);
++		return defines;
++	}
++
++	void AmbientOcclusion::ResetBindings()
++	{
++		for (auto& sets : m_TraceSets)
++			sets.fill(nullptr);
++		for (auto& sets : m_FilterSets)
++			sets.fill(nullptr);
++	}
++
++	void AmbientOcclusion::ResolutionChanged([[maybe_unused]] uint2 resolution)
++	{
++		ResetBindings();
++	}
++
++	void AmbientOcclusion::SettingsChanged(const Settings& settings)
++	{
++		auto defines = BuildDefines(settings);
++		if (defines != m_Defines) {
++			m_Defines = eastl::move(defines);
++			CreatePipeline();
++		}
++	}
++
++	void AmbientOcclusion::EnsureHistory()
++	{
++		const uint2 resolution = GetRenderer()->GetResolution();
++		if (m_History[0] && m_History[1] && resolution.x == m_HistorySize.x && resolution.y == m_HistorySize.y)
++			return;
++
++		auto device = GetRenderer()->GetDevice();
++
++		for (uint32_t i = 0; i < 2; i++) {
++			nvrhi::TextureDesc desc;
++			desc.width = eastl::max<uint32_t>(1u, resolution.x);
++			desc.height = eastl::max<uint32_t>(1u, resolution.y);
++			desc.format = nvrhi::Format::RGBA16_FLOAT;
++			desc.isUAV = true;
++			desc.initialState = nvrhi::ResourceStates::Common;
++			desc.keepInitialState = true;
++			const std::string name = std::format("RT AO History {}", i);
++			desc.debugName = name.c_str();
++			m_History[i] = device->createTexture(desc);
++		}
++
++		m_HistorySize = resolution;
++		m_Parity = 0;
++		ResetBindings();
++	}
++
++	void AmbientOcclusion::CreatePipeline()
++	{
++		ResetBindings();
++		m_TracePipeline = nullptr;
++		m_FilterPipeline = nullptr;
++
++		if (!m_Supported)
++			return;
++
++		auto device = GetRenderer()->GetDevice();
++		auto* sceneGraph = Scene::GetSingleton()->GetSceneGraph();
++
++		// Trace + temporal pass: same resource set as the GI ray generation (its
++		// Registers.hlsli), plus the history input and the engine motion vectors.
++		{
++			nvrhi::BindingLayoutDesc layoutDesc;
++			layoutDesc.visibility = nvrhi::ShaderType::Compute;
++			layoutDesc.bindings = {
++				nvrhi::BindingLayoutItem::Sampler(0),
++				nvrhi::BindingLayoutItem::Sampler(1),
++				nvrhi::BindingLayoutItem::Sampler(2),
++				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
++				nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
++				nvrhi::BindingLayoutItem::VolatileConstantBuffer(2),
++				nvrhi::BindingLayoutItem::RayTracingAccelStruct(0),
++				nvrhi::BindingLayoutItem::Texture_SRV(1),
++				nvrhi::BindingLayoutItem::Texture_SRV(2),
++				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
++				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
++				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
++				nvrhi::BindingLayoutItem::Texture_SRV(6),
++				nvrhi::BindingLayoutItem::Texture_SRV(7),
++				nvrhi::BindingLayoutItem::Texture_SRV(8),
++				nvrhi::BindingLayoutItem::Texture_SRV(9),
++				nvrhi::BindingLayoutItem::Texture_SRV(10),
++				nvrhi::BindingLayoutItem::Texture_SRV(13),
++				nvrhi::BindingLayoutItem::Texture_SRV(14),
++				nvrhi::BindingLayoutItem::Texture_SRV(15),
++				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16),
++				nvrhi::BindingLayoutItem::RawBuffer_SRV(19),
++				nvrhi::BindingLayoutItem::RawBuffer_SRV(20),
++				nvrhi::BindingLayoutItem::Texture_SRV(21),  // AO history (previous)
++				nvrhi::BindingLayoutItem::Texture_SRV(22),  // engine motion vectors
++				nvrhi::BindingLayoutItem::Texture_UAV(0)    // AO history (current)
++			};
++			m_TraceLayout = device->createBindingLayout(layoutDesc);
++
++			auto defines = Util::Shader::GetDXCDefines(m_Defines);
++			defines.emplace_back(L"USE_RAY_QUERY", L"1");
++
++			auto blob = ShaderCache::GetShader(L"data/shaders/raytracing/AmbientOcclusion/RayGeneration.hlsl", defines, ShaderStage::Compute);
++			if (!blob) {
++				logger::error("FalkosLichtspiel RT AO: trace shader compilation failed");
++				return;
++			}
++			m_TraceShader = device->createShader({ nvrhi::ShaderType::Compute, "RT AO Trace", "Main" }, blob->GetBufferPointer(), blob->GetBufferSize());
++			if (!m_TraceShader)
++				return;
++
++			auto pipelineDesc = nvrhi::ComputePipelineDesc()
++				.setComputeShader(m_TraceShader)
++				.addBindingLayout(m_TraceLayout)
++				.addBindingLayout(sceneGraph->GetTriangleDescriptors()->m_Layout)
++				.addBindingLayout(sceneGraph->GetVertexDescriptors()->m_Layout)
++				.addBindingLayout(sceneGraph->GetMaterialDescriptors()->m_Layout)
++				.addBindingLayout(sceneGraph->GetTextureDescriptors()->m_Layout)
++				.addBindingLayout(sceneGraph->GetCubemapDescriptors()->m_Layout)
++				.addBindingLayout(sceneGraph->GetDynamicVertexDescriptors()->m_Layout);
++
++			m_TracePipeline = device->createComputePipeline(pipelineDesc);
++		}
++
++		// Spatial filter pass.
++		{
++			nvrhi::BindingLayoutDesc layoutDesc;
++			layoutDesc.visibility = nvrhi::ShaderType::Compute;
++			layoutDesc.bindings = {
++				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
++				nvrhi::BindingLayoutItem::Texture_SRV(0),
++				nvrhi::BindingLayoutItem::Texture_SRV(1),
++				nvrhi::BindingLayoutItem::Texture_UAV(0)
++			};
++			m_FilterLayout = device->createBindingLayout(layoutDesc);
++
++			winrt::com_ptr<IDxcBlob> blob;
++			ShaderUtils::CompileShader(blob, L"data/shaders/AOFilter.hlsl", {}, ShaderStage::Compute, L"Main");
++			if (!blob) {
++				logger::error("FalkosLichtspiel RT AO: filter shader compilation failed");
++				return;
++			}
++			m_FilterShader = device->createShader({ nvrhi::ShaderType::Compute, "RT AO Filter", "Main" }, blob->GetBufferPointer(), blob->GetBufferSize());
++			if (!m_FilterShader)
++				return;
++
++			m_FilterPipeline = device->createComputePipeline(
++				nvrhi::ComputePipelineDesc().setComputeShader(m_FilterShader).addBindingLayout(m_FilterLayout));
++		}
++
++		logger::info("FalkosLichtspiel RT AO: pipelines {}", (m_TracePipeline && m_FilterPipeline) ? "created" : "FAILED");
++	}
++
++	void AmbientOcclusion::Execute(nvrhi::ICommandList* commandList)
++	{
++		auto* renderer = GetRenderer();
++		auto* mainTexture = renderer->GetMainTexture();
++
++		if (!m_TracePipeline || !m_FilterPipeline) {
++			// Without a working pipeline report "fully open" so the raster image is unchanged.
++			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(1.f));
++			return;
++		}
++
++		EnsureHistory();
++
++		const uint32_t slot = renderer->GetCurrentSlot();
++		const uint32_t current = m_Parity;
++		const uint32_t previous = 1u - m_Parity;
++
++		auto* scene = Scene::GetSingleton();
++		auto* sceneGraph = scene->GetSceneGraph();
++		auto* renderTargets = renderer->GetRenderTargets();
++		auto& textureManager = renderer->RenderTargetManager();
++
++		auto& traceSet = m_TraceSets[slot][current];
++		if (!traceSet) {
++			nvrhi::BindingSetDesc desc;
++			desc.bindings = {
++				nvrhi::BindingSetItem::Sampler(0, m_LinearWrapSampler),
++				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
++				nvrhi::BindingSetItem::Sampler(2, m_PointWrapSampler),
++				nvrhi::BindingSetItem::ConstantBuffer(0, scene->GetCameraBuffer()),
++				nvrhi::BindingSetItem::ConstantBuffer(1, m_SceneTLAS->GetRaytracingBuffer()),
++				nvrhi::BindingSetItem::ConstantBuffer(2, scene->GetFeatureBuffer()),
++				nvrhi::BindingSetItem::RayTracingAccelStruct(0, m_SceneTLAS->GetTopLevelAS().GetHandle()),
++				nvrhi::BindingSetItem::Texture_SRV(1, scene->GetSkyHemiTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(2, scene->GetFlowMapTexture()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(3, sceneGraph->GetLightBuffer()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(4, sceneGraph->GetInstanceBuffer()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(5, sceneGraph->GetMeshBuffer()),
++				nvrhi::BindingSetItem::Texture_SRV(6, renderer->GetDepthTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(7, renderTargets->albedo),
++				nvrhi::BindingSetItem::Texture_SRV(8, renderTargets->normalRoughness),
++				nvrhi::BindingSetItem::Texture_SRV(9, renderTargets->gnmao),
++				nvrhi::BindingSetItem::Texture_SRV(10, textureManager.GetTexture(RenderTarget::FaceNormals)),
++				nvrhi::BindingSetItem::Texture_SRV(13, renderer->GetWaterDisplacementTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(14, scene->GetSkinDetailNormalTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(15, scene->GetProjNoiseTexture()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, sceneGraph->GetTransformBuffer()),
++				nvrhi::BindingSetItem::RawBuffer_SRV(19, sceneGraph->GetMeshSlotRemapBuffer()),
++				nvrhi::BindingSetItem::RawBuffer_SRV(20, sceneGraph->GetPropertiesBuffer()),
++				nvrhi::BindingSetItem::Texture_SRV(21, m_History[previous]),
++				nvrhi::BindingSetItem::Texture_SRV(22, renderer->GetMotionVectorTexture()),
++				nvrhi::BindingSetItem::Texture_UAV(0, m_History[current])
++			};
++			traceSet = renderer->GetDevice()->createBindingSet(desc, m_TraceLayout);
++		}
++
++		auto& filterSet = m_FilterSets[slot][current];
++		if (!filterSet) {
++			nvrhi::BindingSetDesc desc;
++			desc.bindings = {
++				nvrhi::BindingSetItem::ConstantBuffer(0, scene->GetCameraBuffer()),
++				nvrhi::BindingSetItem::Texture_SRV(0, m_History[current]),
++				nvrhi::BindingSetItem::Texture_SRV(1, renderTargets->normalRoughness),
++				nvrhi::BindingSetItem::Texture_UAV(0, mainTexture)
++			};
++			filterSet = renderer->GetDevice()->createBindingSet(desc, m_FilterLayout);
++		}
++
++		if (!traceSet || !filterSet) {
++			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(1.f));
++			return;
++		}
++
++		const auto resolution = renderer->GetDynamicResolution();
++		const auto groups = Util::Math::GetDispatchCount(resolution, 8);
++
++		commandList->beginMarker("FalkosLichtspiel RT AO");
++		{
++			nvrhi::ComputeState state;
++			state.pipeline = m_TracePipeline;
++			state.bindings = {
++				traceSet,
++				sceneGraph->GetTriangleDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++				sceneGraph->GetVertexDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++				sceneGraph->GetMaterialDescriptors()->m_DescriptorTable,
++				sceneGraph->GetTextureDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++				sceneGraph->GetCubemapDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++				sceneGraph->GetDynamicVertexDescriptors()->m_DescriptorTable
++			};
++			commandList->setComputeState(state);
++			commandList->dispatch(groups.x, groups.y);
++		}
++		{
++			nvrhi::ComputeState state;
++			state.pipeline = m_FilterPipeline;
++			state.bindings = { filterSet };
++			commandList->setComputeState(state);
++			commandList->dispatch(groups.x, groups.y);
++		}
++		commandList->endMarker();
++
++		m_Parity = previous;
++	}
++}
+diff --git a/src/Pass/Raytracing/AmbientOcclusion.h b/src/Pass/Raytracing/AmbientOcclusion.h
+new file mode 100644
+index 0000000..7a93555
+--- /dev/null
++++ b/src/Pass/Raytracing/AmbientOcclusion.h
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: raytraced ambient occlusion for the raster lighting modes.
++#pragma once
++
++#include <PCH.h>
++
++#include "Pass/RenderPass.h"
++#include "CameraData.hlsli"
++#include "framework/DescriptorTableManager.h"
++#include "Util.h"
++
++#include "Pass/Raytracing/Common/SceneTLAS.h"
++
++#include "Events/ITLASUpdateListener.h"
++
++namespace Pass::Raytracing
++{
++	class AmbientOcclusion : public RenderPass, ITLASUpdateListener
++	{
++		nvrhi::ShaderHandle m_TraceShader;
++		nvrhi::ComputePipelineHandle m_TracePipeline;
++		nvrhi::BindingLayoutHandle m_TraceLayout;
++
++		nvrhi::ShaderHandle m_FilterShader;
++		nvrhi::ComputePipelineHandle m_FilterPipeline;
++		nvrhi::BindingLayoutHandle m_FilterLayout;
++
++		// [slot][history parity]
++		eastl::array<eastl::array<nvrhi::BindingSetHandle, 2>, Constants::MAX_FRAMES_IN_FLIGHT> m_TraceSets{};
++		eastl::array<eastl::array<nvrhi::BindingSetHandle, 2>, Constants::MAX_FRAMES_IN_FLIGHT> m_FilterSets{};
++
++		eastl::array<nvrhi::TextureHandle, 2> m_History{};
++		uint2 m_HistorySize{ 0, 0 };
++		uint32_t m_Parity = 0;
++		bool m_Supported = true;
++
++		nvrhi::SamplerHandle m_LinearWrapSampler;
++		nvrhi::SamplerHandle m_LinearClampSampler;
++		nvrhi::SamplerHandle m_PointWrapSampler;
++
++		SceneTLAS* m_SceneTLAS;
++
++		eastl::vector<ShaderDefine> m_Defines;
++
++		void ResetBindings();
++		void EnsureHistory();
++		eastl::vector<ShaderDefine> BuildDefines(const Settings& settings) const;
++
++	public:
++		AmbientOcclusion(Renderer* renderer, SceneTLAS* sceneTLAS);
++
++		void OnTLASResized([[maybe_unused]] TopLevelAS& tlas) override { ResetBindings(); }
++
++		virtual void CreatePipeline() override;
++		virtual void ResolutionChanged(uint2 resolution) override;
++		virtual void SettingsChanged(const Settings& settings) override;
++		virtual void Execute(nvrhi::ICommandList* commandList) override;
++	};
++}
+diff --git a/src/Scene.cpp b/src/Scene.cpp
+index 2cf4f64..0df7c9f 100644
+--- a/src/Scene.cpp
++++ b/src/Scene.cpp
+@@ -28,6 +28,7 @@
+ #include "Pass/Raytracing/PathTracing.h"
+ #include "Pass/Raytracing/ReSTIRGIPass.h"
+ #include "Pass/Raytracing/ShadowLab.h"
++#include "Pass/Raytracing/AmbientOcclusion.h"
+ #include "Pass/Raster/GBuffer.h"
+ #include "Pass/NRD/NRDIntegration.h"
+ #include "Pass/Raytracing/Common/Accumulation.h"
+@@ -279,6 +280,24 @@ void Scene::UpdateMode(Mode mode)
+ 		renderGraph->AddNode({ true, "PT Composite", eastl::move(ptComposite) });
+ 		renderGraph->AddNode({ false, "Accumulation", eastl::move(accumulation) });
+ 	}
++	else if (mode == Mode::AmbientOcclusion || mode == Mode::RTLightsAO) {
++		// FalkosLichtspiel: raster lighting stays; only short AO rays are traced.
++		// RTLightsAO gets its light pass in a later round and runs AO only for now.
++		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
++		auto landLod = eastl::make_unique<Pass::LandLODOccluder>(renderer);
++		auto transformComp = eastl::make_unique<Pass::TransformComposition>(renderer);
++		auto sceneTLAS = eastl::make_unique<Pass::SceneTLAS>(renderer);
++		auto* tlasPtr = sceneTLAS.get();
++		auto faceNormals = eastl::make_unique<Pass::Utility::FaceNormals>(renderer);
++		auto aoPass = eastl::make_unique<Pass::Raytracing::AmbientOcclusion>(renderer, tlasPtr);
++
++		renderGraph->AddNode({ true, "Skinning", eastl::move(skinning) });
++		renderGraph->AddNode({ true, "LandLOD Occluder", eastl::move(landLod) });
++		renderGraph->AddNode({ true, "Transform Composition", eastl::move(transformComp) });
++		renderGraph->AddNode({ true, "Scene TLAS", eastl::move(sceneTLAS) });
++		renderGraph->AddNode({ true, "Face Normals", eastl::move(faceNormals) });
++		renderGraph->AddNode({ true, "RT Ambient Occlusion", eastl::move(aoPass) });
++	}
+ 	else if (mode == Mode::Debug) {
+ 		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
+ 		auto transformComp = eastl::make_unique<Pass::TransformComposition>(renderer);
+diff --git a/src/Types/Settings.h b/src/Types/Settings.h
+index cb4c4e9..b28cf1b 100644
+--- a/src/Types/Settings.h
++++ b/src/Types/Settings.h
+@@ -5,7 +5,11 @@ enum class Mode
+ 	None,
+ 	GlobalIllumination,
+ 	PathTracing,
+-	Debug
++	Debug,
++	// FalkosLichtspiel: raster lighting with raytraced additions (appended, values above unchanged)
++	AmbientOcclusion,
++	RTLights,
++	RTLightsAO
+ };
+ 
+ enum class Denoiser

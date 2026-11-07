@@ -1006,10 +1006,10 @@ index 0000000..000b60a
 +Version = 1-0-0
 diff --git a/include/CreationEngineRaytracing.h b/include/CreationEngineRaytracing.h
 new file mode 100644
-index 0000000..01376dd
+index 0000000..243164b
 --- /dev/null
 +++ b/include/CreationEngineRaytracing.h
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,598 @@
 +#pragma once
 +
 +#include <array>
@@ -1032,7 +1032,11 @@ index 0000000..01376dd
 +		None,
 +		GlobalIllumination,
 +		PathTracing,
-+		Debug
++		Debug,
++		// FalkosLichtspiel: raster lighting with raytraced additions (appended, values above unchanged)
++		AmbientOcclusion,
++		RTLights,
++		RTLightsAO
 +	};
 +
 +	enum class Denoiser
@@ -1575,7 +1579,7 @@ index 0000000..01376dd
 +		}
 +
 +        auto stamp = reinterpret_cast<uint32_t (*)()>(GetProcAddress(handle, "GetShadowLabABI"));
-+        if (!stamp || stamp() != 0x20261031u) {
++        if (!stamp || stamp() != 0x20261107u) {
 +            logger::critical("ShadowLab: backend pair mismatch; refusing initialization");
 +            handle = nullptr;
 +            return;
@@ -1604,10 +1608,158 @@ index 0000000..01376dd
 +        if (!InitializeRenderer || !InitializeVulkanRenderer || !Initialize || !UpdateCamera || !Execute || !PostExecution || !SetResolution || !UpdateFeatureData || !SetSkyHemisphere || !SetWaterFlowMap || !GetPassTimings || !GetSceneGraphCounters || !UpdateSettings || !GetRRInput || !GetHybridRRInputs || !SetSharedTextures || !GetSharedTextures || !UpdateJitter || !SetSkinDetailNormal || !GetAccumulatedFrameCount || !GetFakeDoubledVRAMUsage) handle = nullptr;
 +	}
 +};
+diff --git a/package/SKSE/Plugins/CommunityShaders/Themes/Default.json b/package/SKSE/Plugins/CommunityShaders/Themes/Default.json
+index ba3aa3d..46e0b0c 100644
+--- a/package/SKSE/Plugins/CommunityShaders/Themes/Default.json
++++ b/package/SKSE/Plugins/CommunityShaders/Themes/Default.json
+@@ -1,6 +1,6 @@
+ {
+     "DisplayName": "Default Dark",
+-    "Description": "The classic Community Shaders dark theme with modern styling",
++    "Description": "The classic dark theme with modern styling",
+     "Version": "1.0.0",
+     "Author": "Community Shaders Team",
+     "Theme": {
 diff --git a/package/SKSE/Plugins/CommunityShaders/Translations/en.json b/package/SKSE/Plugins/CommunityShaders/Translations/en.json
-index 173d6ed..130f517 100644
+index 173d6ed..a848c88 100644
 --- a/package/SKSE/Plugins/CommunityShaders/Translations/en.json
 +++ b/package/SKSE/Plugins/CommunityShaders/Translations/en.json
+@@ -694,7 +694,7 @@
+     "feature.grass_lighting.mid_lod_grass": "Middle LOD Grass",
+     "feature.grass_lighting.name": "Grass Lighting",
+     "feature.grass_lighting.override_complex": "Override Complex Grass Lighting Settings",
+-    "feature.grass_lighting.override_complex_tooltip": "Override the settings set by the grass mesh author. Complex grass authors can define the brightness for their grass meshes. However, some authors may not account for the extra lights available from Community Shaders. This option will treat their grass settings like non-complex grass. This was the default in Community Shaders < 0.7.0",
++    "feature.grass_lighting.override_complex_tooltip": "Override the settings set by the grass mesh author. Complex grass authors can define the brightness for their grass meshes. However, some authors may not account for the extra lights available from Falkos Lichtspiel. This option will treat their grass settings like non-complex grass. This was the default in versions before 0.7.0",
+     "feature.grass_lighting.specular_desc": "Specular highlights for complex grass",
+     "feature.grass_lighting.specular_strength": "Specular Strength",
+     "feature.grass_lighting.specular_strength_tooltip": "Specular highlight strength.",
+@@ -1147,7 +1147,7 @@
+     "feature.renderdoc.disk_usage_tooltip": "Monitor capture storage usage",
+     "feature.renderdoc.double_click_hint": "Double-click a filename to open the capture file",
+     "feature.renderdoc.enable_capture": "Enable RenderDoc Capture",
+-    "feature.renderdoc.enable_capture_tooltip": "Enable RenderDoc frame capture for providing debug captures to the Community Shaders team.",
++    "feature.renderdoc.enable_capture_tooltip": "Enable RenderDoc frame capture for providing debug captures to the Falkos Lichtspiel team.",
+     "feature.renderdoc.enable_capture_tooltip2": "Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled.",
+     "feature.renderdoc.hover_hint": "Hover over filenames for file details",
+     "feature.renderdoc.no_files": "No capture files found.",
+@@ -1839,24 +1839,24 @@
+     "menu.clear_shader_cache": "Clear Shader Cache",
+     "menu.clear_shader_cache_tooltip": "Clears the shader cache and disk cache (if enabled). The Shader Cache is the collection of compiled shaders which replace the vanilla shaders at runtime. The Disk Cache is a collection of compiled shaders on disk. Clearing will mean that shaders are recompiled only when the game re-encounters them.",
+     "menu.disable_at_boot_desc": "Select features to disable at boot. This is the same as deleting a feature.ini file. Restart will be required to reenable.",
+-    "menu.faq.a1": "Community Shaders is a comprehensive graphics enhancement framework for Skyrim that provides advanced lighting, materials, and visual effects. It's designed to be modular, allowing you to enable only the features you want while maintaining good performance.",
++    "menu.faq.a1": "Falkos Lichtspiel is a graphics enhancement framework for Skyrim with hardware raytracing, based on Community Shaders and Creation Engine Raytracing. It provides advanced lighting, materials, and visual effects. It's designed to be modular, allowing you to enable only the features you want while maintaining good performance.",
+     "menu.faq.a2": "Each feature can be found in the left sidebar menu. Click on any feature to access its settings. Most features include presets and detailed tooltips to help you understand what each setting does.",
+     "menu.faq.a3": "Features may fail to load due to hardware incompatibility, missing dependencies, or conflicts with other mods. Check the 'Feature Issues' tab for detailed information about any problematic features.",
+     "menu.faq.a4": "Failed shaders are usually caused by mixed file versions. Ensure all features are up to date and avoid mixing files from test builds or outdated versions. Please review the 'Feature Issues' tab and/or Wiki for more information. Update your features and remove any obsolete features.",
+     "menu.faq.a5": "Start by enabling the Performance Overlay to monitor your FPS. Consider disabling expensive features like Screen Space GI or reducing quality settings. The 'Display' tab also includes upscaling options that can improve performance.",
+-    "menu.faq.a6": "No, Community Shaders is not compatible with ENB. Community Shaders will automatically disable itself if ENB is detected.",
+-    "menu.faq.a7": "By default, Community Shaders uses the END key to open this menu. If your keyboard doesn't have an END key or it's not working, you can change it in the General > Keybindings tab. You can also edit the hotkey in the JSON configuration files.",
+-    "menu.faq.a8": "We're always looking for talented developers to join the team! Check out our GitHub wiki for contribution guidelines and join our Discord server to connect with the development team. Whether you're interested in shader programming, C++ development, or documentation, there's always something to contribute.",
+-    "menu.faq.a9": "Yes! Community Shaders is completely open source and available on GitHub. You can view the source code, report issues, suggest features, and contribute to the project. The project is licensed under GPL, ensuring it remains free and open for everyone. Branding materials and assets (icons, nexus branding, typography, etc) are not covered by the GPL Licence. Any included assets may not be used without explicit permission.",
+-    "menu.faq.q1": "What is Community Shaders?",
++    "menu.faq.a6": "No, Falkos Lichtspiel is not compatible with ENB. Falkos Lichtspiel will automatically disable itself if ENB is detected.",
++    "menu.faq.a7": "By default, Falkos Lichtspiel uses the END key to open this menu. If your keyboard doesn't have an END key or it's not working, you can change it in the General > Keybindings tab. You can also edit the hotkey in the JSON configuration files.",
++    "menu.faq.a8": "Falkos Lichtspiel is developed in the public GitHub repository SkyrimRTLab. Bug reports and suggestions are welcome there.",
++    "menu.faq.a9": "Yes! Falkos Lichtspiel is completely open source and available on GitHub. You can view the source code, report issues, suggest features, and contribute to the project. The project is licensed under GPL, ensuring it remains free and open for everyone. Branding materials and assets (icons, nexus branding, typography, etc) are not covered by the GPL Licence. Any included assets may not be used without explicit permission.",
++    "menu.faq.q1": "What is Falkos Lichtspiel?",
+     "menu.faq.q2": "How do I configure features?",
+     "menu.faq.q3": "Why are some features not loading?",
+     "menu.faq.q4": "I have \"Failed Shaders\" when compiling?",
+     "menu.faq.q5": "How do I improve performance?",
+-    "menu.faq.q6": "Is Community Shaders compatible with ENB?",
++    "menu.faq.q6": "Is Falkos Lichtspiel compatible with ENB?",
+     "menu.faq.q7": "The menu hotkey isn't working!",
+-    "menu.faq.q8": "I would like to help develop Community Shaders.",
+-    "menu.faq.q9": "Is Community Shaders open source?",
++    "menu.faq.q8": "I would like to help develop Falkos Lichtspiel.",
++    "menu.faq.q9": "Is Falkos Lichtspiel open source?",
+     "menu.faq.title": "Frequently Asked Questions",
+     "menu.features": "Features",
+     "menu.features.advanced": "Advanced",
+@@ -1911,12 +1911,12 @@
+     "menu.home.constraints_desc": "Some settings are constrained by other features. Hover over rows for details.",
+     "menu.home.dev_wiki": "Developer Wiki",
+     "menu.home.github": "GitHub",
+-    "menu.home.intro": "Community Shaders provides advanced graphics enhancements for Skyrim.\nThis comprehensive collection of features brings modern rendering techniques\nto enhance your visual experience.",
++    "menu.home.intro": "Falkos Lichtspiel provides advanced graphics enhancements for Skyrim.\nThis comprehensive collection of features brings modern rendering techniques\nto enhance your visual experience.",
+     "menu.home.join_discord": "Join our Discord",
+     "menu.home.nexus_mods": "Nexus Mods",
+     "menu.home.quick_links": "Quick Links",
+-    "menu.home.welcome": "Welcome to Community Shaders {version}",
+-    "menu.home.welcome_dev": "Welcome to Community Shaders {version} [{build}]",
++    "menu.home.welcome": "Welcome to Falkos Lichtspiel {version}",
++    "menu.home.welcome_dev": "Welcome to Falkos Lichtspiel {version} [{build}]",
+     "menu.home.wiki": "Wiki",
+     "menu.issues.all_ini_loading": "All feature INI files are loading successfully.",
+     "menu.issues.cancel": "Cancel",
+@@ -1929,7 +1929,7 @@
+     "menu.issues.compilation_breaking_header": "Compilation Breaking Features",
+     "menu.issues.compilation_persist_warning": "If compilation issues persist after deletion:",
+     "menu.issues.core_feature_installed": "Core feature already installed",
+-    "menu.issues.core_feature_installed_tooltip": "This feature is already included as part of the core Community Shaders installation. Uninstall this feature with your mod manager.",
++    "menu.issues.core_feature_installed_tooltip": "This feature is already included as part of the core Falkos Lichtspiel installation. Uninstall this feature with your mod manager.",
+     "menu.issues.current_version": "Current Version: %s",
+     "menu.issues.delete": "Delete",
+     "menu.issues.delete_confirm": "Are you sure? This will delete all files for feature '%s'?",
+@@ -1962,7 +1962,7 @@
+     "menu.issues.override_failures_desc": "The following override files failed to load or apply. Check the file format and content.",
+     "menu.issues.override_failures_header": "Override Failures",
+     "menu.issues.potential_compilation_failure": "POTENTIAL COMPILATION FAILURE",
+-    "menu.issues.reinstall_cs": "Consider reinstalling Community Shaders if issues persist",
++    "menu.issues.reinstall_cs": "Consider reinstalling Falkos Lichtspiel if issues persist",
+     "menu.issues.replaced_by_prefix": "(replaced by ",
+     "menu.issues.replaced_by_suffix": ")",
+     "menu.issues.replacement_label": "Replacement: %s",
+@@ -2019,7 +2019,7 @@
+     "menu.settings.cancel": "Cancel",
+     "menu.settings.cell_padding": "Cell Padding",
+     "menu.settings.center_header_title": "Center Header Title",
+-    "menu.settings.center_header_title_tooltip": "Centers the Community Shaders title and logo in the header title bar",
++    "menu.settings.center_header_title_tooltip": "Centers the title and logo in the header title bar",
+     "menu.settings.child_border_size": "Child Border Size",
+     "menu.settings.child_rounding": "Child Rounding",
+     "menu.settings.color_background": "Background",
+@@ -2145,7 +2145,7 @@
+     "menu.settings.item_inner_spacing": "Item Inner Spacing",
+     "menu.settings.item_spacing": "Item Spacing",
+     "menu.settings.language": "Language",
+-    "menu.settings.language_tooltip": "Select the display language for the Community Shaders interface.",
++    "menu.settings.language_tooltip": "Select the display language for the Falkos Lichtspiel interface.",
+     "menu.settings.last_shader_cache_duration": "Last shader cache build duration: %s",
+     "menu.settings.log_slider_deadzone": "Log Slider Deadzone",
+     "menu.settings.no_families": "No families",
+@@ -2240,7 +2240,7 @@
+     "menu.settings.use_custom_shaders": "Use Custom Shaders",
+     "menu.settings.use_custom_shaders_tooltip": "Disabling this effectively disables all features.",
+     "menu.settings.use_monochrome_cs_logo": "Use Monochrome CS Logo",
+-    "menu.settings.use_monochrome_cs_logo_tooltip": "Uses monochrome version of the Community Shaders logo",
++    "menu.settings.use_monochrome_cs_logo_tooltip": "Uses monochrome version of the logo",
+     "menu.settings.use_monochrome_icons": "Use Monochrome Icons",
+     "menu.settings.use_monochrome_icons_tooltip": "Uses white monochrome icons that adapt to your theme's text color",
+     "menu.settings.use_resolution_based_font_size": "Use resolution-based font size",
+@@ -2254,16 +2254,16 @@
+     "menu.setup.cs_editor_unbound": "CS Editor hotkey unbound - chosen key uses Shift",
+     "menu.setup.cs_editor_will_be": "CS Editor hotkey will be: {key}",
+     "menu.setup.new_install_line1": "This appears to be a new install, update, or",
+-    "menu.setup.new_install_line2": "reinstallation of Community Shaders.",
++    "menu.setup.new_install_line2": "reinstallation of Falkos Lichtspiel.",
+     "menu.setup.press_any_key": "Press any key to set as toggle key...",
+     "menu.setup.press_to_close": "Press Escape or Enter to continue",
+     "menu.toggle_error_message": "Toggle Error Message",
+     "menu.toggle_error_message_tooltip": "Hide or show the shader failure message. Your installation is broken and will likely see errors in game. Please double check you have updated all features and that your load order is correct. See CommunityShaders.log for details and check the Nexus Mods page or Discord server.",
+-    "menu.window_title": "Community Shaders {version}",
+-    "menu.window_title_dev": "Community Shaders {version} [{build}]",
+-    "native_menu.graphics.heading": "Community Shaders",
+-    "native_menu.graphics.open_menu": "Open Community Shaders Menu",
+-    "native_menu.graphics.open_menu_desc": "Opens the full Community Shaders settings window.",
++    "menu.window_title": "Falkos Lichtspiel {version}",
++    "menu.window_title_dev": "Falkos Lichtspiel {version} [{build}]",
++    "native_menu.graphics.heading": "Falkos Lichtspiel",
++    "native_menu.graphics.open_menu": "Open Falkos Lichtspiel Menu",
++    "native_menu.graphics.open_menu_desc": "Opens the full Falkos Lichtspiel settings window.",
+     "native_menu.hdr.enable": "Enable HDR",
+     "native_menu.hdr.enable_desc": "Real HDR output for HDR displays. Greyed out until an HDR-capable, HDR-enabled display is detected; use the full settings menu's Advanced override to force it otherwise.",
+     "native_menu.ssgi.enable": "Enable Screen Space GI",
 @@ -2287,5 +2287,170 @@
      "ui.copy": "Copy",
      "ui.dont_ask_again": "Don't ask me again",
@@ -1780,10 +1932,287 @@ index 173d6ed..130f517 100644
 +    "feature.upscaling.dlss_rr_model_preset_e": "Preset E",
 +    "feature.upscaling.frame_generation_unavailable": "Frame Generation is not available on your system.\nThis requires either NVIDIA DLSS-G or AMD FSR 3.1 Frame Generation support and D3D12 interop."
  }
+diff --git a/package/SKSE/Plugins/CommunityShaders/Translations/ja.json b/package/SKSE/Plugins/CommunityShaders/Translations/ja.json
+index 849b718..7f49ecb 100644
+--- a/package/SKSE/Plugins/CommunityShaders/Translations/ja.json
++++ b/package/SKSE/Plugins/CommunityShaders/Translations/ja.json
+@@ -34,8 +34,8 @@
+     "menu.setup.press_to_close": "続けるにはEnterかEscキーを押してください",
+     "menu.toggle_error_message": "エラーメッセージのトグル",
+     "menu.toggle_error_message_tooltip": "シェーダーエラーメッセージの表示/非表示を切り替えます。インストールに問題があり、ゲーム内でエラーが発生する可能性があります。すべての機能が更新されていること、およびロード順序が正しいことを再度確認してください。詳細はCommunityShaders.logを参照するか、Nexus ModsページまたはDiscordサーバーをご確認ください。",
+-    "menu.window_title": "Community Shaders {version}",
+-    "menu.window_title_dev": "Community Shaders {version} [{build}]",
++    "menu.window_title": "Falkos Lichtspiel {version}",
++    "menu.window_title_dev": "Falkos Lichtspiel {version} [{build}]",
+     "overlay.modified_features": "シェーダーに変更が加えられたと思われる機能があります。メニューの「問題のある機能」を確認してください。",
+     "overlay.uncompiled_warning": "警告: コンパイルされていないシェーダーは読み込み時に視覚的なエラーや、スタッタリングを引き起こすことがあります。",
+     "ui.cancel": "キャンセル",
+diff --git a/package/SKSE/Plugins/CommunityShaders/Translations/ru.json b/package/SKSE/Plugins/CommunityShaders/Translations/ru.json
+index b1d36cf..bafa803 100644
+--- a/package/SKSE/Plugins/CommunityShaders/Translations/ru.json
++++ b/package/SKSE/Plugins/CommunityShaders/Translations/ru.json
+@@ -679,7 +679,7 @@
+     "feature.grass_lighting.lighting": "Освещение",
+     "feature.grass_lighting.name": "Освещение травы",
+     "feature.grass_lighting.override_complex": "Переопределить настройки освещения сложной травы",
+-    "feature.grass_lighting.override_complex_tooltip": "Переопределяет настройки, заданные автором меша травы. Авторы сложной травы могут задавать яркость для своих мешей. Однако некоторые авторы могут не учитывать дополнительные источники света Community Shaders. Этот параметр обрабатывает их настройки как несложную траву. Это было поведением по умолчанию в Community Shaders < 0.7.0",
++    "feature.grass_lighting.override_complex_tooltip": "Переопределяет настройки, заданные автором меша травы. Авторы сложной травы могут задавать яркость для своих мешей. Однако некоторые авторы могут не учитывать дополнительные источники света Falkos Lichtspiel. Этот параметр обрабатывает их настройки как несложную траву. Это было поведением по умолчанию в < 0.7.0",
+     "feature.grass_lighting.specular_desc": "Зеркальные блики для сложной травы",
+     "feature.grass_lighting.specular_strength": "Сила зеркального блика",
+     "feature.grass_lighting.specular_strength_tooltip": "Сила зеркального блика.",
+@@ -962,7 +962,7 @@
+     "feature.renderdoc.disk_usage_tooltip": "Мониторинг использования диска для захватов",
+     "feature.renderdoc.double_click_hint": "Дважды щёлкните имя файла, чтобы открыть захват",
+     "feature.renderdoc.enable_capture": "Включить захват RenderDoc",
+-    "feature.renderdoc.enable_capture_tooltip": "Включить захват кадров RenderDoc для предоставления отладочных захватов команде Community Shaders.",
++    "feature.renderdoc.enable_capture_tooltip": "Включить захват кадров RenderDoc для предоставления отладочных захватов команде Falkos Lichtspiel.",
+     "feature.renderdoc.enable_capture_tooltip2": "Включение захвата принудительно включит аннотации кадров для упрощения отладки и восстановит предыдущую настройку при отключении.",
+     "feature.renderdoc.hover_hint": "Наведите курсор на имена файлов для просмотра деталей",
+     "feature.renderdoc.no_files": "Файлы захватов не найдены.",
+@@ -1629,24 +1629,24 @@
+     "menu.clear_shader_cache": "Очистить кэш шейдеров",
+     "menu.clear_shader_cache_tooltip": "Очищает кэш шейдеров и кэш на диске (если включён). Кэш шейдеров — набор скомпилированных шейдеров, заменяющих ванильные шейдеры во время выполнения. Кэш на диске — набор скомпилированных шейдеров на диске. Очистка означает, что шейдеры будут перекомпилированы только при следующей встрече с ними в игре.",
+     "menu.disable_at_boot_desc": "Выберите функции для отключения при загрузке. Это эквивалентно удалению файла feature.ini. Для повторного включения потребуется перезапуск.",
+-    "menu.faq.a1": "Community Shaders — комплексный фреймворк улучшения графики для Skyrim, предоставляющий продвинутое освещение, материалы и визуальные эффекты. Разработан по модульному принципу, позволяющему включать только нужные функции с сохранением хорошей производительности.",
++    "menu.faq.a1": "Falkos Lichtspiel — комплексный фреймворк улучшения графики для Skyrim, предоставляющий продвинутое освещение, материалы и визуальные эффекты. Разработан по модульному принципу, позволяющему включать только нужные функции с сохранением хорошей производительности.",
+     "menu.faq.a2": "Каждую функцию можно найти в боковом меню слева. Нажмите на любую функцию для доступа к её настройкам. Большинство функций включают пресеты и детальные подсказки, помогающие понять назначение каждой настройки.",
+     "menu.faq.a3": "Функции могут не загружаться из-за несовместимости оборудования, отсутствующих зависимостей или конфликтов с другими модами. Проверьте вкладку «Проблемы с функциями» для получения подробной информации о проблемных функциях.",
+     "menu.faq.a4": "Неудавшиеся шейдеры обычно вызваны смешением версий файлов. Убедитесь, что все функции обновлены, и не смешивайте файлы из тестовых сборок или устаревших версий. Просмотрите вкладку «Проблемы с функциями» и/или Вики для получения дополнительной информации. Обновите функции и удалите устаревшие.",
+     "menu.faq.a5": "Начните с включения оверлея производительности для мониторинга FPS. Рассмотрите отключение ресурсоёмких функций, таких как Screen Space GI, или снижение настроек качества. Вкладка «Дисплей» также включает параметры апскейлинга для улучшения производительности.",
+-    "menu.faq.a6": "Нет, Community Shaders несовместим с ENB. Community Shaders автоматически отключается при обнаружении ENB.",
+-    "menu.faq.a7": "По умолчанию Community Shaders использует клавишу END для открытия этого меню. Если на вашей клавиатуре нет клавиши END или она не работает, вы можете изменить её на вкладке «Общее > Горячие клавиши». Также можно отредактировать горячую клавишу в конфигурационных JSON-файлах.",
++    "menu.faq.a6": "Нет, Falkos Lichtspiel несовместим с ENB. Falkos Lichtspiel автоматически отключается при обнаружении ENB.",
++    "menu.faq.a7": "По умолчанию Falkos Lichtspiel использует клавишу END для открытия этого меню. Если на вашей клавиатуре нет клавиши END или она не работает, вы можете изменить её на вкладке «Общее > Горячие клавиши». Также можно отредактировать горячую клавишу в конфигурационных JSON-файлах.",
+     "menu.faq.a8": "Мы всегда ищем талантливых разработчиков в команду! Ознакомьтесь с вики GitHub для руководства по вкладу и присоединяйтесь к нашему серверу Discord для общения с командой разработки. Будь то шейдерное программирование, разработка C++ или документация — всегда есть чем заняться.",
+-    "menu.faq.a9": "Да! Community Shaders полностью открытый и доступен на GitHub. Вы можете просматривать исходный код, сообщать о проблемах, предлагать функции и вносить вклад в проект. Проект лицензирован по GPL, обеспечивая его свободу и открытость для всех. Брендинговые материалы и ресурсы (иконки, брендинг Nexus, типографика и т.д.) не подпадают под лицензию GPL. Включённые ресурсы не могут использоваться без явного разрешения.",
+-    "menu.faq.q1": "Что такое Community Shaders?",
++    "menu.faq.a9": "Да! Falkos Lichtspiel полностью открытый и доступен на GitHub. Вы можете просматривать исходный код, сообщать о проблемах, предлагать функции и вносить вклад в проект. Проект лицензирован по GPL, обеспечивая его свободу и открытость для всех. Брендинговые материалы и ресурсы (иконки, брендинг Nexus, типографика и т.д.) не подпадают под лицензию GPL. Включённые ресурсы не могут использоваться без явного разрешения.",
++    "menu.faq.q1": "Что такое Falkos Lichtspiel?",
+     "menu.faq.q2": "Как настроить функции?",
+     "menu.faq.q3": "Почему некоторые функции не загружаются?",
+     "menu.faq.q4": "У меня «Неудавшиеся шейдеры» при компиляции?",
+     "menu.faq.q5": "Как улучшить производительность?",
+-    "menu.faq.q6": "Совместим ли Community Shaders с ENB?",
++    "menu.faq.q6": "Совместим ли Falkos Lichtspiel с ENB?",
+     "menu.faq.q7": "Горячая клавиша меню не работает!",
+-    "menu.faq.q8": "Я хотел бы помочь в разработке Community Shaders.",
+-    "menu.faq.q9": "Community Shaders с открытым исходным кодом?",
++    "menu.faq.q8": "Я хотел бы помочь в разработке Falkos Lichtspiel.",
++    "menu.faq.q9": "Falkos Lichtspiel с открытым исходным кодом?",
+     "menu.faq.title": "Часто задаваемые вопросы",
+     "menu.features": "Функции",
+     "menu.features.advanced": "Дополнительно",
+@@ -1699,12 +1699,12 @@
+     "menu.home.constraints_desc": "Некоторые настройки ограничены другими функциями. Наведите курсор на строки для получения подробностей.",
+     "menu.home.dev_wiki": "Вики разработчика",
+     "menu.home.github": "GitHub",
+-    "menu.home.intro": "Community Shaders предоставляет расширенные графические улучшения для Skyrim.\nЭта всесторонняя коллекция функций привносит современные техники рендеринга\nдля улучшения вашего визуального опыта.",
++    "menu.home.intro": "Falkos Lichtspiel предоставляет расширенные графические улучшения для Skyrim.\nЭта всесторонняя коллекция функций привносит современные техники рендеринга\nдля улучшения вашего визуального опыта.",
+     "menu.home.join_discord": "Присоединиться к Discord",
+     "menu.home.nexus_mods": "Nexus Mods",
+     "menu.home.quick_links": "Быстрые ссылки",
+-    "menu.home.welcome": "Добро пожаловать в Community Shaders {version}",
+-    "menu.home.welcome_dev": "Добро пожаловать в Community Shaders {version} [{build}]",
++    "menu.home.welcome": "Добро пожаловать в Falkos Lichtspiel {version}",
++    "menu.home.welcome_dev": "Добро пожаловать в Falkos Lichtspiel {version} [{build}]",
+     "menu.home.wiki": "Вики",
+     "menu.issues.all_ini_loading": "Все INI-файлы функций загружаются успешно.",
+     "menu.issues.cancel": "Отмена",
+@@ -1717,7 +1717,7 @@
+     "menu.issues.compilation_breaking_header": "Функции, нарушающие компиляцию",
+     "menu.issues.compilation_persist_warning": "Если проблемы компиляции сохраняются после удаления:",
+     "menu.issues.core_feature_installed": "Базовая функция уже установлена",
+-    "menu.issues.core_feature_installed_tooltip": "Эта функция уже входит в состав базовой установки Community Shaders. Удалите её через менеджер модов.",
++    "menu.issues.core_feature_installed_tooltip": "Эта функция уже входит в состав базовой установки Falkos Lichtspiel. Удалите её через менеджер модов.",
+     "menu.issues.current_version": "Текущая версия: %s",
+     "menu.issues.delete": "Удалить",
+     "menu.issues.delete_confirm": "Вы уверены? Это удалит все файлы функции '%s'?",
+@@ -1750,7 +1750,7 @@
+     "menu.issues.override_failures_desc": "Следующие файлы переопределений не удалось загрузить или применить. Проверьте формат и содержимое файла.",
+     "menu.issues.override_failures_header": "Ошибки переопределений",
+     "menu.issues.potential_compilation_failure": "ВОЗМОЖНАЯ ОШИБКА КОМПИЛЯЦИИ",
+-    "menu.issues.reinstall_cs": "Рассмотрите переустановку Community Shaders, если проблемы сохраняются",
++    "menu.issues.reinstall_cs": "Рассмотрите переустановку Falkos Lichtspiel, если проблемы сохраняются",
+     "menu.issues.replaced_by_prefix": "(заменено на ",
+     "menu.issues.replaced_by_suffix": ")",
+     "menu.issues.replacement_label": "Замена: %s",
+@@ -1807,7 +1807,7 @@
+     "menu.settings.cancel": "Отмена",
+     "menu.settings.cell_padding": "Отступ ячейки",
+     "menu.settings.center_header_title": "Центрировать заголовок",
+-    "menu.settings.center_header_title_tooltip": "Центрирует название и логотип Community Shaders в заголовке",
++    "menu.settings.center_header_title_tooltip": "Центрирует название и логотип Falkos Lichtspiel в заголовке",
+     "menu.settings.child_border_size": "Размер рамки дочернего окна",
+     "menu.settings.child_rounding": "Скругление дочернего окна",
+     "menu.settings.color_background": "Фон",
+@@ -1930,7 +1930,7 @@
+     "menu.settings.item_inner_spacing": "Внутренний отступ элементов",
+     "menu.settings.item_spacing": "Отступ между элементами",
+     "menu.settings.language": "Язык",
+-    "menu.settings.language_tooltip": "Выбор языка интерфейса Community Shaders.",
++    "menu.settings.language_tooltip": "Выбор языка интерфейса Falkos Lichtspiel.",
+     "menu.settings.last_shader_cache_duration": "Длительность последней сборки кэша: %s",
+     "menu.settings.log_slider_deadzone": "Мёртвая зона логарифмического слайдера",
+     "menu.settings.no_families": "Нет семейств",
+@@ -2023,7 +2023,7 @@
+     "menu.settings.use_custom_shaders": "Использовать пользовательские шейдеры",
+     "menu.settings.use_custom_shaders_tooltip": "Отключение фактически отключает все функции.",
+     "menu.settings.use_monochrome_cs_logo": "Монохромный логотип CS",
+-    "menu.settings.use_monochrome_cs_logo_tooltip": "Использует монохромную версию логотипа Community Shaders",
++    "menu.settings.use_monochrome_cs_logo_tooltip": "Использует монохромную версию логотипа Falkos Lichtspiel",
+     "menu.settings.use_monochrome_icons": "Монохромные иконки",
+     "menu.settings.use_monochrome_icons_tooltip": "Белые монохромные иконки, адаптирующиеся к цвету текста темы",
+     "menu.settings.use_resolution_based_font_size": "Размер шрифта на основе разрешения",
+@@ -2037,13 +2037,13 @@
+     "menu.setup.cs_editor_unbound": "Горячая клавиша CS Editor не назначена — выбранная клавиша использует Shift",
+     "menu.setup.cs_editor_will_be": "Горячая клавиша CS Editor: {key}",
+     "menu.setup.new_install_line1": "Похоже, это новая установка, обновление или",
+-    "menu.setup.new_install_line2": "переустановка Community Shaders.",
++    "menu.setup.new_install_line2": "переустановка Falkos Lichtspiel.",
+     "menu.setup.press_any_key": "Нажмите любую клавишу для назначения...",
+     "menu.setup.press_to_close": "Нажмите Escape или Enter для продолжения",
+     "menu.toggle_error_message": "Переключить сообщение об ошибке",
+     "menu.toggle_error_message_tooltip": "Скрыть или показать сообщение об ошибке шейдера. Установка неисправна. Проверьте обновления и порядок загрузки. Подробности в CommunityShaders.log и на странице Nexus Mods или Discord.",
+-    "menu.window_title": "Community Shaders {version}",
+-    "menu.window_title_dev": "Community Shaders {version} [{build}]",
++    "menu.window_title": "Falkos Lichtspiel {version}",
++    "menu.window_title_dev": "Falkos Lichtspiel {version} [{build}]",
+     "overlay.modified_features": "Обнаружены функции, возможно изменившие шейдеры. Проверьте «Проблемы с функциями».",
+     "overlay.shader_blocking_active": "Блокировка шейдеров активна",
+     "overlay.uncompiled_warning": "ПРЕДУПРЕЖДЕНИЕ: нескомпилированные шейдеры вызовут визуальные ошибки или заикания при загрузке.",
 diff --git a/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json b/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json
-index da5425b..c9602ba 100644
+index da5425b..46a57e8 100644
 --- a/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json
 +++ b/package/SKSE/Plugins/CommunityShaders/Translations/zh_CN.json
+@@ -677,7 +677,7 @@
+     "feature.grass_lighting.lighting": "光照",
+     "feature.grass_lighting.name": "草地光照",
+     "feature.grass_lighting.override_complex": "覆盖复杂草地光照设置",
+-    "feature.grass_lighting.override_complex_tooltip": "覆盖草地网格作者设置的参数。复杂草地作者可以为其草地网格定义亮度。然而，某些作者可能未考虑Community Shaders提供的额外光源。此选项将其草地设置视为非复杂草地。这是Community Shaders < 0.7.0中的默认行为",
++    "feature.grass_lighting.override_complex_tooltip": "覆盖草地网格作者设置的参数。复杂草地作者可以为其草地网格定义亮度。然而，某些作者可能未考虑Falkos Lichtspiel提供的额外光源。此选项将其草地设置视为非复杂草地。这是< 0.7.0中的默认行为",
+     "feature.grass_lighting.specular_desc": "复杂草地的高光",
+     "feature.grass_lighting.specular_strength": "高光强度",
+     "feature.grass_lighting.specular_strength_tooltip": "高光强度。",
+@@ -971,7 +971,7 @@
+     "feature.renderdoc.disk_usage_tooltip": "监控捕获存储使用情况",
+     "feature.renderdoc.double_click_hint": "双击文件名以打开捕获文件",
+     "feature.renderdoc.enable_capture": "启用RenderDoc捕获",
+-    "feature.renderdoc.enable_capture_tooltip": "启用RenderDoc帧捕获，以便为Community Shaders团队提供调试捕获。",
++    "feature.renderdoc.enable_capture_tooltip": "启用RenderDoc帧捕获，以便为Falkos Lichtspiel团队提供调试捕获。",
+     "feature.renderdoc.enable_capture_tooltip2": "启用捕获将强制启用帧注释以便于调试，并在禁用时恢复之前的设置。",
+     "feature.renderdoc.hover_hint": "悬停在文件名上查看文件详情",
+     "feature.renderdoc.no_files": "未找到捕获文件。",
+@@ -1648,24 +1648,24 @@
+     "menu.clear_shader_cache": "清除着色器缓存",
+     "menu.clear_shader_cache_tooltip": "清除着色器缓存和磁盘缓存（如果启用）。着色器缓存是在运行时替换原版着色器的已编译着色器集合。磁盘缓存是磁盘上已编译着色器的集合。清除后意味着着色器仅在游戏再次遇到它们时才重新编译。",
+     "menu.disable_at_boot_desc": "选择要在启动时禁用的功能。这与删除feature.ini文件相同。重新启用需要重启。",
+-    "menu.faq.a1": "Community Shaders是Skyrim的一个综合图形增强框架，提供高级光照、材质和视觉效果。它采用模块化设计，允许您仅启用所需的功能，同时保持良好的性能。",
++    "menu.faq.a1": "Falkos Lichtspiel是Skyrim的一个综合图形增强框架，提供高级光照、材质和视觉效果。它采用模块化设计，允许您仅启用所需的功能，同时保持良好的性能。",
+     "menu.faq.a2": "每个功能都可以在左侧边栏菜单中找到。点击任何功能即可访问其设置。大多数功能包含预设和详细的工具提示，帮助您了解每个设置的作用。",
+     "menu.faq.a3": "功能可能因硬件不兼容、依赖项缺失或与其他模组冲突而无法加载。请查看\"功能问题\"选项卡，了解有关任何有问题的功能的详细信息。",
+     "menu.faq.a4": "着色器失败通常由混合文件版本引起。请确保所有功能均为最新，并避免混合测试版本或过时版本的文件。请查看\"功能问题\"选项卡和/或Wiki了解更多信息。更新您的功能并移除任何过时的功能。",
+     "menu.faq.a5": "首先启用性能叠加层来监控您的FPS。考虑禁用屏幕空间GI等占用资源的功能或降低质量设置。\"显示\"选项卡还包含可以提升性能的升频选项。",
+-    "menu.faq.a6": "不，Community Shaders与ENB不兼容。如果检测到ENB，Community Shaders将自动禁用自身。",
+-    "menu.faq.a7": "默认情况下，Community Shaders使用END键打开此菜单。如果您的键盘没有END键或该键无效，可以在通用 > 按键绑定选项卡中更改。您也可以在JSON配置文件中编辑热键。",
++    "menu.faq.a6": "不，Falkos Lichtspiel与ENB不兼容。如果检测到ENB，Falkos Lichtspiel将自动禁用自身。",
++    "menu.faq.a7": "默认情况下，Falkos Lichtspiel使用END键打开此菜单。如果您的键盘没有END键或该键无效，可以在通用 > 按键绑定选项卡中更改。您也可以在JSON配置文件中编辑热键。",
+     "menu.faq.a8": "我们一直在寻找有才华的开发者加入团队！请查看我们的GitHub wiki了解贡献指南，并加入我们的Discord服务器与开发团队联系。无论您对着色器编程、C++开发还是文档撰写感兴趣，总有可贡献的内容。",
+-    "menu.faq.a9": "是的！Community Shaders完全开源，可在GitHub上获取。您可以查看源代码、报告问题、建议功能和为项目做出贡献。该项目采用GPL许可证，确保对所有人保持免费和开放。品牌材料和资产（图标、Nexus品牌、字体等）不受GPL许可证涵盖。任何包含的资产未经明确许可不得使用。",
+-    "menu.faq.q1": "什么是Community Shaders？",
++    "menu.faq.a9": "是的！Falkos Lichtspiel完全开源，可在GitHub上获取。您可以查看源代码、报告问题、建议功能和为项目做出贡献。该项目采用GPL许可证，确保对所有人保持免费和开放。品牌材料和资产（图标、Nexus品牌、字体等）不受GPL许可证涵盖。任何包含的资产未经明确许可不得使用。",
++    "menu.faq.q1": "什么是Falkos Lichtspiel？",
+     "menu.faq.q2": "如何配置功能？",
+     "menu.faq.q3": "为什么有些功能无法加载？",
+     "menu.faq.q4": "编译时出现“着色器失败”？",
+     "menu.faq.q5": "如何提升性能？",
+-    "menu.faq.q6": "Community Shaders与ENB兼容吗？",
++    "menu.faq.q6": "Falkos Lichtspiel与ENB兼容吗？",
+     "menu.faq.q7": "菜单热键无效！",
+-    "menu.faq.q8": "我想帮助开发Community Shaders。",
+-    "menu.faq.q9": "Community Shaders是开源的吗？",
++    "menu.faq.q8": "我想帮助开发Falkos Lichtspiel。",
++    "menu.faq.q9": "Falkos Lichtspiel是开源的吗？",
+     "menu.faq.title": "常见问题解答",
+     "menu.features": "功能",
+     "menu.features.advanced": "高级",
+@@ -1718,12 +1718,12 @@
+     "menu.home.constraints_desc": "某些设置受其他功能约束。悬停在行上查看详情。",
+     "menu.home.dev_wiki": "开发者Wiki",
+     "menu.home.github": "GitHub",
+-    "menu.home.intro": "Community Shaders为Skyrim提供高级图形增强。\n这套全面的功能集合带来现代渲染技术，\n提升您的视觉体验。",
++    "menu.home.intro": "Falkos Lichtspiel为Skyrim提供高级图形增强。\n这套全面的功能集合带来现代渲染技术，\n提升您的视觉体验。",
+     "menu.home.join_discord": "加入我们的Discord",
+     "menu.home.nexus_mods": "Nexus Mods",
+     "menu.home.quick_links": "快速链接",
+-    "menu.home.welcome": "欢迎使用Community Shaders {version}",
+-    "menu.home.welcome_dev": "欢迎使用Community Shaders {version} [{build}]",
++    "menu.home.welcome": "欢迎使用Falkos Lichtspiel {version}",
++    "menu.home.welcome_dev": "欢迎使用Falkos Lichtspiel {version} [{build}]",
+     "menu.home.wiki": "Wiki",
+     "menu.issues.all_ini_loading": "所有功能INI文件加载成功。",
+     "menu.issues.cancel": "取消",
+@@ -1736,7 +1736,7 @@
+     "menu.issues.compilation_breaking_header": "破坏编译的功能",
+     "menu.issues.compilation_persist_warning": "如果删除后编译问题仍然存在：",
+     "menu.issues.core_feature_installed": "核心功能已安装",
+-    "menu.issues.core_feature_installed_tooltip": "此功能已作为核心Community Shaders安装的一部分包含。请通过模组管理器卸载此功能。",
++    "menu.issues.core_feature_installed_tooltip": "此功能已作为核心Falkos Lichtspiel安装的一部分包含。请通过模组管理器卸载此功能。",
+     "menu.issues.current_version": "当前版本：%s",
+     "menu.issues.delete": "删除",
+     "menu.issues.delete_confirm": "确定要删除功能'%s'的所有文件吗？",
+@@ -1769,7 +1769,7 @@
+     "menu.issues.override_failures_desc": "以下覆盖文件加载或应用失败。请检查文件格式和内容。",
+     "menu.issues.override_failures_header": "覆盖失败",
+     "menu.issues.potential_compilation_failure": "潜在的编译失败",
+-    "menu.issues.reinstall_cs": "如果问题持续存在，请考虑重新安装Community Shaders",
++    "menu.issues.reinstall_cs": "如果问题持续存在，请考虑重新安装Falkos Lichtspiel",
+     "menu.issues.replaced_by_prefix": "（被替换为",
+     "menu.issues.replaced_by_suffix": "）",
+     "menu.issues.replacement_label": "替代：%s",
+@@ -1826,7 +1826,7 @@
+     "menu.settings.cancel": "取消",
+     "menu.settings.cell_padding": "单元格内边距",
+     "menu.settings.center_header_title": "居中标题",
+-    "menu.settings.center_header_title_tooltip": "将Community Shaders标题和徽标在标题栏中居中",
++    "menu.settings.center_header_title_tooltip": "将Falkos Lichtspiel标题和徽标在标题栏中居中",
+     "menu.settings.child_border_size": "子窗口边框大小",
+     "menu.settings.child_rounding": "子窗口圆角",
+     "menu.settings.color_background": "背景",
+@@ -1950,7 +1950,7 @@
+     "menu.settings.item_inner_spacing": "项目内部间距",
+     "menu.settings.item_spacing": "项目间距",
+     "menu.settings.language": "语言",
+-    "menu.settings.language_tooltip": "选择Community Shaders界面的显示语言。",
++    "menu.settings.language_tooltip": "选择Falkos Lichtspiel界面的显示语言。",
+     "menu.settings.last_shader_cache_duration": "上次着色器缓存构建持续时间：%s",
+     "menu.settings.log_slider_deadzone": "对数滑块死区",
+     "menu.settings.no_families": "无字体家族",
+@@ -2045,7 +2045,7 @@
+     "menu.settings.use_custom_shaders": "使用自定义着色器",
+     "menu.settings.use_custom_shaders_tooltip": "禁用此项实际上会禁用所有功能。",
+     "menu.settings.use_monochrome_cs_logo": "使用单色CS徽标",
+-    "menu.settings.use_monochrome_cs_logo_tooltip": "使用Community Shaders徽标的单色版本",
++    "menu.settings.use_monochrome_cs_logo_tooltip": "使用Falkos Lichtspiel徽标的单色版本",
+     "menu.settings.use_monochrome_icons": "使用单色图标",
+     "menu.settings.use_monochrome_icons_tooltip": "使用适应主题文本颜色的白色单色图标",
+     "menu.settings.use_resolution_based_font_size": "使用基于分辨率的字体大小",
+@@ -2059,13 +2059,13 @@
+     "menu.setup.cs_editor_unbound": "CS 编辑器热键未绑定 - 所选键使用 Shift",
+     "menu.setup.cs_editor_will_be": "CS 编辑器热键将为：{key}",
+     "menu.setup.new_install_line1": "这似乎是一个新的安装、更新，或",
+-    "menu.setup.new_install_line2": "重新安装Community Shaders。",
++    "menu.setup.new_install_line2": "重新安装Falkos Lichtspiel。",
+     "menu.setup.press_any_key": "按下任意键设置为切换键...",
+     "menu.setup.press_to_close": "按Escape或Enter继续",
+     "menu.toggle_error_message": "切换错误消息",
+     "menu.toggle_error_message_tooltip": "隐藏或显示着色器失败消息。您的安装已损坏，游戏中可能会看到错误。请仔细检查是否已更新所有功能以及加载顺序是否正确。请参阅CommunityShaders.log了解详情，并查看Nexus Mods页面或Discord服务器。",
+-    "menu.window_title": "Community Shaders {version}",
+-    "menu.window_title_dev": "Community Shaders {version} [{build}]",
++    "menu.window_title": "Falkos Lichtspiel {version}",
++    "menu.window_title_dev": "Falkos Lichtspiel {version} [{build}]",
+     "overlay.modified_features": "检测到可能修改了着色器的功能。请检查菜单中的功能问题。",
+     "overlay.shader_blocking_active": "着色器拦截已激活",
+     "overlay.uncompiled_warning": "警告：未编译的着色器在加载时会有视觉错误或导致卡顿。",
 @@ -2077,5 +2077,170 @@
      "ui.copy": "复制",
      "ui.dont_ask_again": "不再提示",
@@ -2117,10 +2546,10 @@ index 4dd0105..84a1153 100644
  
  	namespace ExtraFeatureFlags
 diff --git a/package/Shaders/Common/SharedData.hlsli b/package/Shaders/Common/SharedData.hlsli
-index 8ae0643..f4d9e91 100644
+index 8ae0643..ccf7560 100644
 --- a/package/Shaders/Common/SharedData.hlsli
 +++ b/package/Shaders/Common/SharedData.hlsli
-@@ -334,6 +334,16 @@ namespace SharedData
+@@ -334,6 +334,17 @@ namespace SharedData
  		float2 pad0;
  	};
  
@@ -2131,13 +2560,14 @@ index 8ae0643..f4d9e91 100644
 +		float Reflection;
 +		uint Albedo;
 +		uint PathTracing;
-+		uint3 _padding;
++		uint AmbientOcclusion;  // FalkosLichtspiel: RT AO in the deferred composite
++		uint2 _padding;
 +	};
 +
  	struct TruePBRSettings
  	{
  		float VertexAOStrength;
-@@ -351,6 +361,47 @@ namespace SharedData
+@@ -351,6 +362,47 @@ namespace SharedData
  		float4 wetParams;
  	};
  
@@ -2185,7 +2615,7 @@ index 8ae0643..f4d9e91 100644
  	cbuffer FeatureData : register(b6)
  	{
  		GrassLightingSettings grassLightingSettings;
-@@ -370,8 +421,12 @@ namespace SharedData
+@@ -370,8 +422,12 @@ namespace SharedData
  		ENBSettings enbSettings;
  		TerrainBlendingSettings terrainBlendingSettings;
  		ExponentialHeightFogSettings exponentialHeightFogSettings;
@@ -2199,7 +2629,7 @@ index 8ae0643..f4d9e91 100644
  
  	Texture2D<float4> DepthTexture : register(t17);
 diff --git a/package/Shaders/DeferredCompositeCS.hlsl b/package/Shaders/DeferredCompositeCS.hlsl
-index c46430a..b000577 100644
+index c46430a..812e8bc 100644
 --- a/package/Shaders/DeferredCompositeCS.hlsl
 +++ b/package/Shaders/DeferredCompositeCS.hlsl
 @@ -46,11 +46,11 @@ Texture2D<float4> SsgiSpecularTexture : register(t13);
@@ -2216,7 +2646,57 @@ index c46430a..b000577 100644
  	float2 ssgiIlCoCg = SsgiCoCgTexture[pixCoord];
  	il = max(0, Color::YCoCgToRGB(float3(ssgiIlY, ssgiIlCoCg)));
  }
-@@ -183,7 +183,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
+@@ -77,6 +77,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
+ }
+ #endif
+ 
++#if defined(RAYTRACING)
++// FalkosLichtspiel: raytraced AO from the raster hybrid modes (1 = open).
++Texture2D<float4> RTAmbientOcclusionTexture : register(t16);
++#endif
++
+ #if defined(IBL)
+ #	if !defined(DYNAMIC_CUBEMAPS)
+ #		undef IBL
+@@ -114,12 +119,28 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
+ 	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
+ 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
+ 
+-#if defined(SSGI)
++#if defined(SSGI) || defined(RAYTRACING)
+ 
+-	float ssgiAo;
+-	float3 ssgiIl;
++	float ssgiAo = 1.0;
++	float3 ssgiIl = 0;
++	bool applyAo = false;
++
++#	if defined(SSGI)
+ 	SampleSSGI(dispatchID.xy, normalWS, ssgiAo, ssgiIl);
++	applyAo = true;
++#	endif
+ 
++#	if defined(RAYTRACING)
++	// FalkosLichtspiel: RT AO replaces the screen-space AO term (SSGI indirect light stays).
++	[branch] if (SharedData::raytracingSettings.AmbientOcclusion)
++	{
++		ssgiAo = saturate(RTAmbientOcclusionTexture[dispatchID.xy].x);
++		applyAo = true;
++	}
++#	endif
++
++	[branch] if (applyAo)
++	{
+ 	// Masks2.x stores 1 - vertexAO (Lighting.hlsl only); cleared to 0 for
+ 	// pixels with no vertex AO contribution, so vertexAO defaults to 1.
+ 	float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
+@@ -178,12 +199,17 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
+ 	}
+ 
+ 	linDiffuseColor += ssgiIl * linAlbedo;
++	}
+ #endif
+ 
  	float3 color = linDiffuseColor + specularColor;
  
  #if defined(DYNAMIC_CUBEMAPS)
@@ -2229,7 +2709,18 @@ index c46430a..b000577 100644
  	float3 reflectance = ReflectanceTexture[dispatchID.xy];
  
  	if (any(reflectance > 0.0)) {
-@@ -289,6 +293,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
+@@ -284,11 +310,21 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
+ 		}
+ 
+ 		finalIrradiance += ssgiIlSpecular;
++#	elif defined(RAYTRACING)
++		[branch] if (SharedData::raytracingSettings.AmbientOcclusion)
++		{
++			float NdotV = saturate(dot(normalWS, V));
++			finalIrradiance *= SpecularOcclusion(NdotV, roughness * roughness, ssgiAo);
++		}
+ #	endif
+ 
  		color += reflectance * finalIrradiance;
  	}
  
@@ -3287,7 +3778,7 @@ index 0000000..d4f4b88
 +};
 \ No newline at end of file
 diff --git a/src/Deferred.cpp b/src/Deferred.cpp
-index f53d621..5a9c391 100644
+index f53d621..1a985f0 100644
 --- a/src/Deferred.cpp
 +++ b/src/Deferred.cpp
 @@ -6,15 +6,16 @@
@@ -3407,7 +3898,27 @@ index f53d621..5a9c391 100644
  		};
  
  		if (dynamicCubemaps.loaded)
-@@ -599,6 +611,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
+@@ -371,6 +383,10 @@ void Deferred::DeferredPasses()
+ 
+ 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+ 
++		// FalkosLichtspiel: raytraced AO (raster hybrid modes), read when raytracingSettings.AmbientOcclusion is set.
++		ID3D11ShaderResourceView* rtAmbientOcclusion = globals::features::raytracing.loaded ? globals::features::raytracing.GetAmbientOcclusionSRV() : nullptr;
++		context->CSSetShaderResources(16, 1, &rtAmbientOcclusion);
++
+ 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
+ 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+ 
+@@ -387,7 +403,7 @@ void Deferred::DeferredPasses()
+ 
+ 	// Clear
+ 	{
+-		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
++		ID3D11ShaderResourceView* views[17]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+ 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
+ 
+ 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
+@@ -599,6 +615,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
  		if (globals::features::screenSpaceGI.loaded)
  			defines.push_back({ "SSGI", nullptr });
  
@@ -3417,7 +3928,7 @@ index f53d621..5a9c391 100644
  		if (globals::features::ibl.loaded)
  			defines.push_back({ "IBL", nullptr });
  
-@@ -626,6 +641,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
+@@ -626,6 +645,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
  		if (globals::features::screenSpaceGI.loaded)
  			defines.push_back({ "SSGI", nullptr });
  
@@ -3428,7 +3939,7 @@ index f53d621..5a9c391 100644
  			defines.push_back({ "IBL", nullptr });
  
 diff --git a/src/Feature.cpp b/src/Feature.cpp
-index d9448a2..9f8c27f 100644
+index d9448a2..6ae2fc1 100644
 --- a/src/Feature.cpp
 +++ b/src/Feature.cpp
 @@ -4,6 +4,8 @@
@@ -3458,6 +3969,15 @@ index d9448a2..9f8c27f 100644
  #include "Features/VolumetricLighting.h"
  #include "Features/VolumetricShadows.h"
  #include "Features/WaterEffects.h"
+@@ -106,7 +111,7 @@ void Feature::Load(json& o_json)
+ 					std::string minimalVersionString = Util::GetFormattedVersion(minimalFeatureVersion);
+ 
+ 					if (IsCore()) {
+-						failedLoadedMessage = std::format("This feature is already included as part of the core Community Shaders installation. Uninstall this feature with your mod manager.");
++						failedLoadedMessage = std::format("This feature is already included as part of the core Falkos Lichtspiel installation. Uninstall this feature with your mod manager.");
+ 					} else if (majorVersionMismatch) {
+ 						failedLoadedMessage = std::format("{} {} is too old, major version incompatibility detected. Required: {}", GetShortName(), value, minimalVersionString);
+ 					} else {
 @@ -231,6 +236,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
  		&globals::features::lightLimitFix,
  		&globals::features::dynamicCubemaps,
@@ -3530,6 +4050,55 @@ index 73aac7c..30602ab 100644
 +		globals::features::cloudRelight.GetCommonBufferData(),
 +		globals::features::foliageLighting.GetCommonBufferData());
 +}
+diff --git a/src/FeatureIssues.cpp b/src/FeatureIssues.cpp
+index 9db14ed..84ce7f2 100644
+--- a/src/FeatureIssues.cpp
++++ b/src/FeatureIssues.cpp
+@@ -49,7 +49,7 @@ namespace FeatureIssues
+ 										  .displayName = "Complex Parallax Materials",
+ 										  .rejectionReason = "Integrated into ExtendedMaterials feature",
+ 										  .replacementFeature = "ExtendedMaterials",
+-										  .userMessage = "This functionality is now built into Community Shaders. Remove the old feature as it's no longer needed.",
++										  .userMessage = "This functionality is now built into Falkos Lichtspiel. Remove the old feature as it's no longer needed.",
+ 										  .removedInVersion = { 1, 0, 0 },
+ 										  .modifiedShaderDirectory = false,
+ 										  .issueType = FeatureIssueInfo::IssueType::OBSOLETE } },
+@@ -57,7 +57,7 @@ namespace FeatureIssues
+ 								 .displayName = "Tree LOD Lighting",
+ 								 .rejectionReason = "Functionality integrated into base CS lighting system",
+ 								 .replacementFeature = "",
+-								 .userMessage = "This functionality is now built into Community Shaders. Remove the old feature as it's no longer needed.",
++								 .userMessage = "This functionality is now built into Falkos Lichtspiel. Remove the old feature as it's no longer needed.",
+ 								 .removedInVersion = { 1, 0, 0 },
+ 								 .modifiedShaderDirectory = true,
+ 								 .issueType = FeatureIssueInfo::IssueType::OBSOLETE } },
+@@ -89,7 +89,7 @@ namespace FeatureIssues
+ 									 .displayName = "Distant Tree Lighting",
+ 									 .rejectionReason = "Replaced by TreeLODLighting, which was later integrated into CS core",
+ 									 .replacementFeature = "",
+-									 .userMessage = "This functionality is now built into Community Shaders. Remove the old feature as it's no longer needed.",
++									 .userMessage = "This functionality is now built into Falkos Lichtspiel. Remove the old feature as it's no longer needed.",
+ 									 .removedInVersion = { 0, 8, 0 },
+ 									 .modifiedShaderDirectory = true,
+ 									 .issueType = FeatureIssueInfo::IssueType::OBSOLETE } }
+@@ -617,7 +617,7 @@ namespace FeatureIssues
+ 			ImGui::Text("%s", T("menu.issues.core_feature_installed", "Core feature already installed"));
+ 			if (auto _tt = Util::HoverTooltipWrapper()) {
+ 				ImGui::TextWrapped("%s", T("menu.issues.core_feature_installed_tooltip",
+-											 "This feature is already included as part of the core Community Shaders installation. Uninstall this feature with your mod manager."));
++											 "This feature is already included as part of the core Falkos Lichtspiel installation. Uninstall this feature with your mod manager."));
+ 			}
+ 		} else if (issue.IsVersionMismatch()) {
+ 			ImGui::SameLine();
+@@ -736,7 +736,7 @@ namespace FeatureIssues
+ 					ImGui::TextColored(theme.StatusPalette.Warning, "%s", T("menu.issues.compilation_persist_warning", "If compilation issues persist after deletion:"));
+ 					ImGui::BulletText("%s", T("menu.issues.uninstall_via_mod_manager", "Completely uninstall the feature via your mod manager"));
+ 					ImGui::BulletText("%s", T("menu.issues.check_modified_files", "Check for modified files in Data/Shaders/ (not in feature subfolders)"));
+-					ImGui::BulletText("%s", T("menu.issues.reinstall_cs", "Consider reinstalling Community Shaders if issues persist"));
++					ImGui::BulletText("%s", T("menu.issues.reinstall_cs", "Consider reinstalling Falkos Lichtspiel if issues persist"));
+ 					ImGui::Spacing();
+ 					ImGui::Separator();
+ 					ImGui::Spacing();
 diff --git a/src/Features/CloudRelight.cpp b/src/Features/CloudRelight.cpp
 new file mode 100644
 index 0000000..14d5892
@@ -3898,6 +4467,22 @@ index 0000000..d5d9080
 +
 +	Settings settings;
 +};
+diff --git a/src/Features/GrassLighting.cpp b/src/Features/GrassLighting.cpp
+index 1965649..f5e6149 100644
+--- a/src/Features/GrassLighting.cpp
++++ b/src/Features/GrassLighting.cpp
+@@ -64,9 +64,9 @@ void GrassLighting::DrawSettings()
+ 			ImGui::Text("%s", T(TKEY("override_complex_tooltip"),
+ 								  "Override the settings set by the grass mesh author. "
+ 								  "Complex grass authors can define the brightness for their grass meshes. "
+-								  "However, some authors may not account for the extra lights available from Community Shaders. "
++								  "However, some authors may not account for the extra lights available from Falkos Lichtspiel. "
+ 								  "This option will treat their grass settings like non-complex grass. "
+-								  "This was the default in Community Shaders < 0.7.0"));
++								  "This was the default in versions before 0.7.0"));
+ 		}
+ 		ImGui::Spacing();
+ 		ImGui::Spacing();
 diff --git a/src/Features/HairSpecular.h b/src/Features/HairSpecular.h
 index 546b80d..8a21786 100644
 --- a/src/Features/HairSpecular.h
@@ -3950,7 +4535,7 @@ index ae98db3..98b7076 100644
  	Settings settings;
  
 diff --git a/src/Features/PerformanceOverlay.cpp b/src/Features/PerformanceOverlay.cpp
-index e20e3af..09b384e 100644
+index e20e3af..b3e3aa2 100644
 --- a/src/Features/PerformanceOverlay.cpp
 +++ b/src/Features/PerformanceOverlay.cpp
 @@ -21,6 +21,7 @@
@@ -3976,12 +4561,21 @@ index e20e3af..09b384e 100644
  		float totalGpuMemory = videoMemoryInfo.Budget / (1024.f * 1024.f * 1024.f);
  		float percent = currentGpuUsage / totalGpuMemory;
  
+@@ -1590,7 +1597,7 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
+ 	DrawCallRow csPassesRow = {
+ 		"CS Passes:", magic_enum::enum_integer(SpecialShaderType::CSPasses), kDrawCallsNotApplicable, csPassesTime, csPercent,
+ 		0.0f,
+-		std::string("GPU time spent in Community Shaders compute passes (profiled)."),
++		std::string("GPU time spent in Falkos Lichtspiel compute passes (profiled)."),
+ 		true, std::nullopt, std::nullopt
+ 	};
+ 	DrawCallRow otherRow = {
 diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
 new file mode 100644
-index 0000000..7dfb2f9
+index 0000000..774f0db
 --- /dev/null
 +++ b/src/Features/Raytracing.cpp
-@@ -0,0 +1,1725 @@
+@@ -0,0 +1,1756 @@
 +#include "Raytracing.h"
 +
 +#include "Globals.h"
@@ -4063,6 +4657,10 @@ index 0000000..7dfb2f9
 +	auto i = 0;
 +
 +	for (auto& [value, name] : magic_enum::enum_entries<T>()) {
++		if (labels[i] == nullptr) {  // FalkosLichtspiel: hidden entry
++			i++;
++			continue;
++		}
 +		ImGui::SameLine();
 +		const auto itemLabel = StableLabel(labels[i], name);
 +		ImGui::RadioButton(itemLabel.c_str(), &enumValue, static_cast<int32_t>(value));
@@ -4157,12 +4755,20 @@ index 0000000..7dfb2f9
 +		T(TKEY("mode"), "Mode"),
 +		"Mode",
 +		settings.CreationEngineRaytracingSettings.GeneralSettings.Mode,
-+		std::array{
++		std::array<const char*, 7>{
 +			T(TKEY("mode_none"), "None"),
 +			T(TKEY("mode_global_illumination"), "Global Illumination"),
 +			T(TKEY("mode_path_tracing"), "Path Tracing"),
 +			T(TKEY("mode_path_debug"), "Debug"),
++			T(TKEY("mode_rt_ao"), "RT AO"),
++			nullptr,  // RT Lights: later round
++			nullptr,  // RT Lights + AO: later round
 +		});
++
++	if (IsRasterHybridMode(settings.CreationEngineRaytracingSettings.GeneralSettings.Mode)) {
++		ImGui::TextWrapped("%s", T(TKEY("mode_rt_ao_info"),
++			"RT AO keeps the raster lighting and replaces screen-space AO with short raytraced occlusion rays. It uses its own denoiser; the denoiser choice below does not apply."));
++	}
 +
 +	DrawEnumRadio(
 +		T(TKEY("denoiser"), "Denoiser"),
@@ -5258,17 +5864,34 @@ index 0000000..7dfb2f9
 +	CompileShaders();
 +}
 +
++ID3D11ShaderResourceView* Raytracing::GetAmbientOcclusionSRV() const
++{
++	if (!initialized || forcedDisabled || !settings.CreationEngineRaytracingSettings.Enabled || !HasRTAmbientOcclusion(Mode()))
++		return nullptr;
++
++	if (currentFrame >= mainTexture.size())
++		return nullptr;
++
++	const auto& texture = mainTexture[currentFrame];
++	return texture ? texture->srv : nullptr;
++}
++
 +Raytracing::SharedData Raytracing::GetCommonBufferData() const
 +{
-+	const bool pathTracingEnabled = settings.CreationEngineRaytracingSettings.Enabled &&
-+	                                settings.CreationEngineRaytracingSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::PathTracing;
++	const bool enabled = settings.CreationEngineRaytracingSettings.Enabled;
++	const auto mode = settings.CreationEngineRaytracingSettings.GeneralSettings.Mode;
++	const bool pathTracingEnabled = enabled && mode == CreationEngineRaytracing::Mode::PathTracing;
++
++	// FalkosLichtspiel: the raster hybrid modes keep the vanilla/CS ambient, reflections and albedo.
++	const bool rtReplacesAmbient = enabled && !IsRasterHybridMode(mode);
 +
 +	return {
-+		.InteriorDirectional = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
-+		.Ambient = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
-+		.EnvMap = settings.CreationEngineRaytracingSettings.Enabled ? 0.0f : 1.0f,
-+		.Albedo = settings.CreationEngineRaytracingSettings.Enabled ? 1u : 0u,
++		.InteriorDirectional = rtReplacesAmbient ? 0.0f : 1.0f,
++		.Ambient = rtReplacesAmbient ? 0.0f : 1.0f,
++		.EnvMap = rtReplacesAmbient ? 0.0f : 1.0f,
++		.Albedo = rtReplacesAmbient ? 1u : 0u,
 +		.PathTracing = pathTracingEnabled ? 1u : 0u,
++		.AmbientOcclusion = GetAmbientOcclusionSRV() ? 1u : 0u,
 +	};
 +}
 +
@@ -5420,7 +6043,7 @@ index 0000000..7dfb2f9
 +    screenData->Resolution = { static_cast<uint>(currentSize.x), static_cast<uint>(currentSize.y) };
 +    screenData->DynamicResolution = { static_cast<uint>(currentDynamicSize.x), static_cast<uint>(currentDynamicSize.y) };
 +    screenCB->Update(screenData.get(), sizeof(ScreenData));
-+	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination)
++	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination || IsRasterHybridMode(Mode()))
 +		ConvertTextures();
 +
 +	CopyWaterFlowap();
@@ -5480,7 +6103,9 @@ index 0000000..7dfb2f9
 +		if (saoParams && saoParams->enableSAO)
 +			ssaoEnabled = true;
 +
-+		const bool shouldEnableSSAO = (globalIllumation || pathtracing || debug) ? false : ssaoEnabled;
++		// FalkosLichtspiel: RT AO replaces vanilla SSAO; RT Lights alone keeps it.
++		const bool rtAmbientOcclusion = HasRTAmbientOcclusion(mode);
++		const bool shouldEnableSSAO = (globalIllumation || pathtracing || debug || rtAmbientOcclusion) ? false : ssaoEnabled;
 +
 +		if (saoParams)
 +			saoParams->enableSAO = shouldEnableSSAO;
@@ -5709,10 +6334,10 @@ index 0000000..7dfb2f9
 +}
 diff --git a/src/Features/Raytracing.h b/src/Features/Raytracing.h
 new file mode 100644
-index 0000000..f0ad8e4
+index 0000000..f4894a6
 --- /dev/null
 +++ b/src/Features/Raytracing.h
-@@ -0,0 +1,408 @@
+@@ -0,0 +1,432 @@
 +#pragma once
 +
 +#include <array>
@@ -5853,6 +6478,30 @@ index 0000000..f0ad8e4
 +		return Available() ? settings.CreationEngineRaytracingSettings.GeneralSettings.Mode : CreationEngineRaytracing::Mode::None;
 +	}
 +
++	// FalkosLichtspiel: modes that keep the raster lighting and add raytraced parts.
++	static constexpr bool IsRasterHybridMode(CreationEngineRaytracing::Mode a_mode)
++	{
++		return a_mode == CreationEngineRaytracing::Mode::AmbientOcclusion ||
++		       a_mode == CreationEngineRaytracing::Mode::RTLights ||
++		       a_mode == CreationEngineRaytracing::Mode::RTLightsAO;
++	}
++
++	static constexpr bool HasRTAmbientOcclusion(CreationEngineRaytracing::Mode a_mode)
++	{
++		return a_mode == CreationEngineRaytracing::Mode::AmbientOcclusion ||
++		       a_mode == CreationEngineRaytracing::Mode::RTLightsAO;
++	}
++
++	// RT AO output for the deferred composite, or nullptr when RT AO is not active this frame.
++	ID3D11ShaderResourceView* GetAmbientOcclusionSRV() const;
++
++	// Ray Reconstruction needs the GI/PT guides; the raster hybrid modes have none.
++	inline bool UsesRayReconstructionGuides() const
++	{
++		return Mode() == CreationEngineRaytracing::Mode::GlobalIllumination ||
++		       Mode() == CreationEngineRaytracing::Mode::PathTracing;
++	}
++
 +	inline bool IsPathTracing() const
 +	{
 +		return Mode() == CreationEngineRaytracing::Mode::PathTracing;
@@ -5935,7 +6584,7 @@ index 0000000..f0ad8e4
 +		float EnvMap;
 +		uint Albedo;
 +		uint PathTracing;
-+		uint _padding0;
++		uint AmbientOcclusion;  // FalkosLichtspiel: deferred composite applies RT AO (t16)
 +		uint _padding1;
 +		uint _padding2;
 +	};
@@ -6121,6 +6770,19 @@ index 0000000..f0ad8e4
 +		}
 +	};
 +};
+diff --git a/src/Features/RemoteControl.h b/src/Features/RemoteControl.h
+index 2679a32..225576e 100644
+--- a/src/Features/RemoteControl.h
++++ b/src/Features/RemoteControl.h
+@@ -43,7 +43,7 @@ public:
+ 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+ 	{
+ 		return {
+-			"Expose Community Shaders to AI assistants through the external devbench host.",
++			"Expose Falkos Lichtspiel to AI assistants through the external devbench host.",
+ 			{
+ 				"Registers feature, inspect, shadercache, capture, and settings tools",
+ 				"Drivable over MCP and REST from the shared devbench bench",
 diff --git a/src/Features/RemoteControl/DevBenchBridge.cpp b/src/Features/RemoteControl/DevBenchBridge.cpp
 index d3f03a7..894d2f9 100644
 --- a/src/Features/RemoteControl/DevBenchBridge.cpp
@@ -6175,6 +6837,19 @@ index 571a556..676d4f4 100644
 +	inline void Install() {}
 +#endif
  }
+diff --git a/src/Features/RenderDoc.cpp b/src/Features/RenderDoc.cpp
+index 7b7354e..88c5565 100644
+--- a/src/Features/RenderDoc.cpp
++++ b/src/Features/RenderDoc.cpp
+@@ -159,7 +159,7 @@ void RenderDoc::DrawSettings()
+ 	}
+ 
+ 	if (auto _tt = Util::HoverTooltipWrapper()) {
+-		ImGui::Text("%s", T(TKEY("enable_capture_tooltip"), "Enable RenderDoc frame capture for providing debug captures to the Community Shaders team."));
++		ImGui::Text("%s", T(TKEY("enable_capture_tooltip"), "Enable RenderDoc frame capture for providing debug captures to the Falkos Lichtspiel team."));
+ 		ImGui::Text("%s", T(TKEY("enable_capture_tooltip2"), "Enabling capture will force-enable frame annotations for easier debugging and will restore the previous setting when disabled."));
+ 	}
+ 
 diff --git a/src/Features/SceneGraphExplorer.cpp b/src/Features/SceneGraphExplorer.cpp
 new file mode 100644
 index 0000000..9be4577
@@ -6589,7 +7264,7 @@ index baaae06..85d7292 100644
  
  	/** @brief Clears the terrain depth stencil buffer to prepare for a new depth pass. */
 diff --git a/src/Features/Upscaling.cpp b/src/Features/Upscaling.cpp
-index 92d1b43..418b0da 100644
+index 92d1b43..97f5357 100644
 --- a/src/Features/Upscaling.cpp
 +++ b/src/Features/Upscaling.cpp
 @@ -1,8 +1,10 @@
@@ -6868,7 +7543,7 @@ index 92d1b43..418b0da 100644
 +	// when the user selects DLSS and the Raytracing Denoiser is set to DLSS_RR.
 +	if (settings.upscaleMethod == UpscaleMethod::kDLSS) {
 +		auto& rt = globals::features::raytracing;
-+		if ((rt.Mode() != CreationEngineRaytracing::Mode::None) &&
++		if (rt.UsesRayReconstructionGuides() &&
 +			rt.settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR &&
 +			(streamline.loadedFeatures & Streamline::Features::kDLSS_RR)) {
 +			return UpscaleMethod::kDLSS_RR;
@@ -9091,6 +9766,19 @@ index 66d5bb3..96270bc 100644
  	void InstallEarlyHooks();
 +	uint CubemapResolution();
  }
+diff --git a/src/Menu.cpp b/src/Menu.cpp
+index 7c7b736..39521f8 100644
+--- a/src/Menu.cpp
++++ b/src/Menu.cpp
+@@ -774,7 +774,7 @@ void Menu::DrawSettings()
+ 	resetLayout = false;
+ 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+ 	auto expectedTag = std::format("v{}", versionStr);
+-	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Community Shaders {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Community Shaders {version} [{build}]");
++	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Falkos Lichtspiel {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Falkos Lichtspiel {version} [{build}]");
+ 	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
+ 	auto title = std::format("{}###CommunityShaders", displayTitle);
+ 
 diff --git a/src/Menu/AdvancedSettingsRenderer.cpp b/src/Menu/AdvancedSettingsRenderer.cpp
 index 79f7f9c..25ffe47 100644
 --- a/src/Menu/AdvancedSettingsRenderer.cpp
@@ -9131,6 +9819,177 @@ index 79f7f9c..25ffe47 100644
  	// Half-precision (partial precision) shader compile flag
  	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
  	if (ImGui::Checkbox(T("menu.advanced.half_precision", "Half Precision (Partial Precision)"), &partialPrecision)) {
+diff --git a/src/Menu/HomePageRenderer.cpp b/src/Menu/HomePageRenderer.cpp
+index ea5716f..ea9c500 100644
+--- a/src/Menu/HomePageRenderer.cpp
++++ b/src/Menu/HomePageRenderer.cpp
+@@ -66,7 +66,7 @@ void HomePageRenderer::RenderWelcomeSection()
+ 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+ 	auto expectedTag = std::format("v{}", versionStr);
+ 	auto* i18n = I18n::GetSingleton();
+-	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Community Shaders {version} [{build}]");
++	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Falkos Lichtspiel {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Falkos Lichtspiel {version} [{build}]");
+ 	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
+ 	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
+ 	ImGui::Text("%s", titleWithVersion.c_str());
+@@ -83,7 +83,7 @@ void HomePageRenderer::RenderWelcomeSection()
+ 
+ 	// Intro text - centered
+ 	const char* introText = T("menu.home.intro",
+-		"Community Shaders provides advanced graphics enhancements for Skyrim.\n"
++		"Falkos Lichtspiel provides advanced graphics enhancements for Skyrim.\n"
+ 		"This comprehensive collection of features brings modern rendering techniques\n"
+ 		"to enhance your visual experience.");
+ 	ImVec2 introSize = ImGui::CalcTextSize(introText);
+@@ -190,10 +190,10 @@ void HomePageRenderer::RenderFAQSection()
+ 	ImGui::Separator();
+ 
+ 	// FAQ items with collapsible headers
+-	if (ImGui::CollapsingHeader(T("menu.faq.q1", "What is Community Shaders?"))) {
++	if (ImGui::CollapsingHeader(T("menu.faq.q1", "What is Falkos Lichtspiel?"))) {
+ 		ImGui::TextWrapped("%s", T("menu.faq.a1",
+-									 "Community Shaders is a comprehensive graphics enhancement framework for Skyrim that "
+-									 "provides advanced lighting, materials, and visual effects. It's designed to be modular, "
++									 "Falkos Lichtspiel is a graphics enhancement framework for Skyrim with hardware raytracing, based on Community Shaders and "
++									 "Creation Engine Raytracing. It provides advanced lighting, materials, and visual effects. It's designed to be modular, "
+ 									 "allowing you to enable only the features you want while maintaining good performance."));
+ 	}
+ 
+@@ -225,30 +225,27 @@ void HomePageRenderer::RenderFAQSection()
+ 									 "tab also includes upscaling options that can improve performance."));
+ 	}
+ 
+-	if (ImGui::CollapsingHeader(T("menu.faq.q6", "Is Community Shaders compatible with ENB?"))) {
++	if (ImGui::CollapsingHeader(T("menu.faq.q6", "Is Falkos Lichtspiel compatible with ENB?"))) {
+ 		ImGui::TextWrapped("%s", T("menu.faq.a6",
+-									 "No, Community Shaders is not compatible with ENB. Community Shaders will automatically "
++									 "No, Falkos Lichtspiel is not compatible with ENB. Falkos Lichtspiel will automatically "
+ 									 "disable itself if ENB is detected."));
+ 	}
+ 
+ 	if (ImGui::CollapsingHeader(T("menu.faq.q7", "The menu hotkey isn't working!"))) {
+ 		ImGui::TextWrapped("%s", T("menu.faq.a7",
+-									 "By default, Community Shaders uses the END key to open this menu. If your keyboard "
++									 "By default, Falkos Lichtspiel uses the END key to open this menu. If your keyboard "
+ 									 "doesn't have an END key or it's not working, you can change it in the General > Keybindings tab. "
+ 									 "You can also edit the hotkey in the JSON configuration files."));
+ 	}
+ 
+-	if (ImGui::CollapsingHeader(T("menu.faq.q8", "I would like to help develop Community Shaders."))) {
++	if (ImGui::CollapsingHeader(T("menu.faq.q8", "I would like to help develop Falkos Lichtspiel."))) {
+ 		ImGui::TextWrapped("%s", T("menu.faq.a8",
+-									 "We're always looking for talented developers to join the team! Check out our GitHub wiki "
+-									 "for contribution guidelines and join our Discord server to connect with the development team. "
+-									 "Whether you're interested in shader programming, C++ development, or documentation, there's "
+-									 "always something to contribute."));
++									 "Falkos Lichtspiel is developed in the public GitHub repository SkyrimRTLab. Bug reports and suggestions are welcome there."));
+ 	}
+ 
+-	if (ImGui::CollapsingHeader(T("menu.faq.q9", "Is Community Shaders open source?"))) {
++	if (ImGui::CollapsingHeader(T("menu.faq.q9", "Is Falkos Lichtspiel open source?"))) {
+ 		ImGui::TextWrapped("%s", T("menu.faq.a9",
+-									 "Yes! Community Shaders is completely open source and available on GitHub. You can view "
++									 "Yes! Falkos Lichtspiel is completely open source and available on GitHub. You can view "
+ 									 "the source code, report issues, suggest features, and contribute to the project. "
+ 									 "The project is licensed under GPL, ensuring it remains free and open for everyone."
+ 									 " Branding materials and assets (icons, nexus branding, typography, etc) are not covered by the GPL Licence."
+@@ -445,7 +442,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
+ 
+ 	// Version text - two lines, both centered (reduced spacing between lines)
+ 	const char* versionLine1 = T("menu.setup.new_install_line1", "This appears to be a new install, update, or");
+-	const char* versionLine2 = T("menu.setup.new_install_line2", "reinstallation of Community Shaders.");
++	const char* versionLine2 = T("menu.setup.new_install_line2", "reinstallation of Falkos Lichtspiel.");
+ 
+ 	centerText(versionLine1);
+ 	ImGui::Text("%s", versionLine1);
+diff --git a/src/Menu/MenuHeaderRenderer.cpp b/src/Menu/MenuHeaderRenderer.cpp
+index 7b564eb..8dca58e 100644
+--- a/src/Menu/MenuHeaderRenderer.cpp
++++ b/src/Menu/MenuHeaderRenderer.cpp
+@@ -26,7 +26,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
+ 
+ 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+ 	auto expectedTag = std::format("v{}", versionStr);
+-	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Community Shaders {}", versionStr) : std::format("Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
++	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Falkos Lichtspiel {}", versionStr) : std::format("Falkos Lichtspiel {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
+ 	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
+ 
+ 	if (isDocked) {
+diff --git a/src/Menu/OverlayRenderer.cpp b/src/Menu/OverlayRenderer.cpp
+index 0e1c41f..ad14a9a 100644
+--- a/src/Menu/OverlayRenderer.cpp
++++ b/src/Menu/OverlayRenderer.cpp
+@@ -30,7 +30,7 @@ namespace
+ 	std::unordered_map<ImGuiID, float> s_windowOverlapAlpha;
+ 
+ 	constexpr ImGuiWindowFlags SKIP_WINDOW_FLAGS = ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
+-	constexpr const char* MAIN_WINDOW_PREFIX = "Community Shaders";
++	constexpr const char* MAIN_WINDOW_PREFIX = "Falkos Lichtspiel";
+ 
+ 	bool IsMainWindow(ImGuiWindow* win) { return win->Name && strncmp(win->Name, MAIN_WINDOW_PREFIX, strlen(MAIN_WINDOW_PREFIX)) == 0; }
+ 
+diff --git a/src/Menu/SettingsTabRenderer.cpp b/src/Menu/SettingsTabRenderer.cpp
+index 6d71887..d322f24 100644
+--- a/src/Menu/SettingsTabRenderer.cpp
++++ b/src/Menu/SettingsTabRenderer.cpp
+@@ -464,7 +464,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
+ 				ImGui::EndCombo();
+ 			}
+ 			if (auto _tt = Util::HoverTooltipWrapper()) {
+-				ImGui::Text("%s", T("menu.settings.language_tooltip", "Select the display language for the Community Shaders interface."));
++				ImGui::Text("%s", T("menu.settings.language_tooltip", "Select the display language for the Falkos Lichtspiel interface."));
+ 			}
+ 		}
+ 
+@@ -490,7 +490,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
+ 				globals::menu->pendingIconReload = true;
+ 			}
+ 			if (auto _tt = Util::HoverTooltipWrapper()) {
+-				ImGui::Text("%s", T("menu.settings.use_monochrome_cs_logo_tooltip", "Uses monochrome version of the Community Shaders logo"));
++				ImGui::Text("%s", T("menu.settings.use_monochrome_cs_logo_tooltip", "Uses monochrome version of the logo"));
+ 			}
+ 			ImGui::Unindent();
+ 		}
+@@ -502,7 +502,7 @@ void SettingsTabRenderer::RenderBehaviorTab()
+ 
+ 		ImGui::Checkbox(T("menu.settings.center_header_title", "Center Header Title"), &themeSettings.CenterHeader);
+ 		if (auto _tt = Util::HoverTooltipWrapper()) {
+-			ImGui::Text("%s", T("menu.settings.center_header_title_tooltip", "Centers the Community Shaders title and logo in the header title bar"));
++			ImGui::Text("%s", T("menu.settings.center_header_title_tooltip", "Centers the title and logo in the header title bar"));
+ 		}
+ 
+ 		ImGui::Checkbox(T("menu.settings.auto_hide_feature_list", "Auto-hide Feature List"), &globals::menu->GetSettings().AutoHideFeatureList);
+diff --git a/src/Menu/ThemeManager.cpp b/src/Menu/ThemeManager.cpp
+index 92341e1..e9f0012 100644
+--- a/src/Menu/ThemeManager.cpp
++++ b/src/Menu/ThemeManager.cpp
+@@ -940,7 +940,7 @@ void ThemeManager::CreateDefaultThemeFiles()
+ 
+ 		file << R"({
+ 	"DisplayName": "Default Theme",
+-	"Description": "Default community shaders theme",
++	"Description": "Default theme",
+ 	"Version": "1.0",
+ 	"Author": "Community Shaders",
+ 	"Theme": {
+diff --git a/src/NativeMenu/Rows_Graphics.cpp b/src/NativeMenu/Rows_Graphics.cpp
+index c8ef738..35e9b03 100644
+--- a/src/NativeMenu/Rows_Graphics.cpp
++++ b/src/NativeMenu/Rows_Graphics.cpp
+@@ -20,10 +20,10 @@ namespace NativeMenu
+ 	std::vector<Row> GraphicsRows()
+ 	{
+ 		std::vector<Row> rows{
+-			NATIVE_MENU_HEADING(T(TKEY("heading"), "Community Shaders")),
++			NATIVE_MENU_HEADING(T(TKEY("heading"), "Falkos Lichtspiel")),
+ 
+-			Button(T(TKEY("open_menu"), "Open Community Shaders Menu"), &OpenCommunityShadersMenu,
+-				T(TKEY("open_menu_desc"), "Opens the full Community Shaders settings window.")),
++			Button(T(TKEY("open_menu"), "Open Falkos Lichtspiel Menu"), &OpenCommunityShadersMenu,
++				T(TKEY("open_menu_desc"), "Opens the full Falkos Lichtspiel settings window.")),
+ 		};
+ 
+ 		AppendRows(rows, HDRRows());
 diff --git a/src/State.cpp b/src/State.cpp
 index f5d81e8..4954481 100644
 --- a/src/State.cpp
@@ -9246,3 +10105,16 @@ index a0ab22f..b31ef46 100644
  	float2 ConvertToDynamic(float2 a_size, bool a_ignoreLock = false);
  
  	// Game unit conversions
+diff --git a/src/XSEPlugin.cpp b/src/XSEPlugin.cpp
+index de1f967..0468bcc 100644
+--- a/src/XSEPlugin.cpp
++++ b/src/XSEPlugin.cpp
+@@ -107,7 +107,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
+ 		{
+ 			for (auto it = errors.begin(); it != errors.end(); ++it) {
+ 				auto& errorMessage = *it;
+-				RE::DebugMessageBox(std::format("Community Shaders\n{}, will disable all hooks and features", errorMessage).c_str());
++				RE::DebugMessageBox(std::format("Falkos Lichtspiel\n{}, will disable all hooks and features", errorMessage).c_str());
+ 			}
+ 
+ 			if (errors.empty()) {

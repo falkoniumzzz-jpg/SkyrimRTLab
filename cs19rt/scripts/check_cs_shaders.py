@@ -63,6 +63,11 @@ def jobs_from_config(cs):
     composite = features + ["COMPUTESHADER"]
     jobs.append(("DeferredCompositeCS.hlsl", "cs_5_0", "main", composite + ["RAYTRACING"], composite))
     jobs.append(("DeferredCompositeCS.hlsl", "cs_5_0", "main", composite + ["RAYTRACING", "INTERIOR"], composite + ["INTERIOR"]))
+    # FalkosLichtspiel RT AO: composite without Screen Space GI (RT AO path on its own) and without IBL.
+    for drop in (["SSGI"], ["SSGI", "IBL"], ["SSGI", "IBL", "SKYLIGHTING", "DYNAMIC_CUBEMAPS"]):
+        reduced = [d for d in composite if d not in drop]
+        jobs.append(("DeferredCompositeCS.hlsl", "cs_5_0", "main", reduced + ["RAYTRACING"], reduced))
+        jobs.append(("DeferredCompositeCS.hlsl", "cs_5_0", "main", reduced + ["RAYTRACING", "INTERIOR"], reduced + ["INTERIOR"]))
     rt = composite + ["RAYTRACING"]
     jobs += [
         ("Raytracing/ConvertTexturesCS.hlsl", "cs_5_0", "main", rt + ["DLSS_RR=0"], None),
