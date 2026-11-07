@@ -1,0 +1,56 @@
+[size=5][b]Falkos Lichtspiel[/b][/size]
+Hardware raytracing for Skyrim SE/AE, built on [b]Community Shaders 1.9[/b] and [b]Creation Engine Raytracing[/b].
+
+Falkos Lichtspiel is a complete replacement for Community Shaders: all Community Shaders 1.9 features plus a hardware-raytracing backend with several modes, from a light hybrid mode to full raytraced global illumination.
+
+[color=#ffcc00][b]Beta.[/b] Tested by the author on one PC (RTX 5080). Other GPUs are untested. Please report bugs on GitHub (link below), not to the Community Shaders or CER developers.[/color]
+
+[size=4][b]Raytracing modes[/b][/size]
+[list]
+[*][b]RT AO[/b] – raytraced ambient occlusion only. Low cost.
+[*][b]RT Lights[/b] – all local lights (torches, candles, fires, magic, lamps) raytraced, with real shadows from the strongest lights. Medium cost.
+[*][b]RT Lights + AO[/b] – both together.
+[*][b]Global Illumination[/b] – raytraced indirect diffuse and specular light. High cost.
+[*][b]Path Tracing[/b] – experimental. Very high cost.
+[/list]
+In the hybrid modes the sun, sky light and reflections stay raster. With raytracing disabled at boot, the mod costs nothing extra.
+
+[size=4][b]Requirements[/b][/size]
+[list]
+[*]Skyrim SE 1.5.97 or AE 1.6.x (not VR)
+[*]SKSE64
+[*]Address Library for SKSE Plugins
+[*]SSE Engine Fixes (required for raytracing)
+[*]Crash Logger SSE AE VR (required for raytracing)
+[*]Windows 10/11, a GPU with hardware raytracing (DXR 1.1) for the RT modes. DLSS Ray Reconstruction is NVIDIA RTX only.
+[/list]
+
+[size=4][b]Installation[/b][/size]
+[list=1]
+[*][b]Disable or remove Community Shaders[/b] and its feature add-ons. Falkos Lichtspiel uses the same file names and replaces them. Do not install both.
+[*]Install the main file with Mod Organizer 2 or Vortex.
+[*]In game, open the menu with [b]End[/b] → Raytracing → Mode.
+[/list]
+Optional file [i]PDBs[/i]: debug symbols for readable Crash Logger logs.
+
+[size=4][b]Known issues[/b][/size]
+[list]
+[*]RT Lights: only the 4 strongest lights per pixel cast shadows; weaker lights are unshadowed.
+[*]Transparent objects, particles and hair keep raster lighting in the RT Lights modes.
+[*]After a loading screen, distant objects can join the raytraced lighting a moment later (intended, avoids stutter).
+[*]AMD and Intel GPUs are untested.
+[/list]
+
+[size=4][b]Bug reports[/b][/size]
+[url=https://github.com/falkoniumzzz-jpg/SkyrimRTLab/issues]GitHub issues[/url] – please attach CommunityShaders.log, CreationEngineRaytracing.log (Documents/My Games/Skyrim Special Edition/SKSE) and the Crash Logger log if the game crashed.
+
+[size=4][b]Credits[/b][/size]
+[list]
+[*][url=https://github.com/community-shaders/skyrim-community-shaders]Community Shaders[/url] team and contributors – the base of this mod
+[*][url=https://github.com/Gistix/CreationEngineRaytracing]Gistix[/url] – Creation Engine Raytracing and the raytracing host integration
+[*]Open Shaders (alandtse and contributors) – Vanilla Fresnel, Cloud Relight, Foliage Lighting
+[*]NVIDIA – Streamline/DLSS, Cloud Relight shaders; AMD – FidelityFX
+[/list]
+
+[size=4][b]License / source code[/b][/size]
+GPL-3.0-or-later with the Community Shaders modding and linking exceptions. Full corresponding source code: optional file [i]Source[/i] and [url=https://github.com/falkoniumzzz-jpg/SkyrimRTLab]github.com/falkoniumzzz-jpg/SkyrimRTLab[/url]. The Community Shaders logo is not covered by the GPL and is not included.

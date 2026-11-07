@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['claude/cs19-rt']
+    tags: ['v*']
     paths: ['cs19rt/**', 'legacy/scripts/check_*.py', '.github/workflows/cs19-rt.yml']
 permissions:
   contents: read
@@ -71,3 +72,33 @@ jobs:
           name: FalkosLichtspiel-CS19-RT-Sources
           path: cs19rt/out/Corresponding-Source.zip
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FalkosLichtspiel-Release
+          path: |
+            cs19rt/out/FalkosLichtspiel-*.zip
+            !cs19rt/out/FalkosLichtspiel-CS19-RT-MO2.zip
+          if-no-files-found: error
+          retention-days: 14
+  release:
+    # Only a pushed tag "v<cs19rt/VERSION>" publishes a GitHub release (marked as pre-release).
+    needs: windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: FalkosLichtspiel-Release
+          path: release
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## " {p = index($0, v) > 0; next} p' cs19rt/release/CHANGELOG.md > notes.md
+          test -s notes.md || echo "FalkosLichtspiel $version" > notes.md
+          gh release create "$GITHUB_REF_NAME" release/*.zip --title "FalkosLichtspiel $version" --notes-file notes.md --prerelease

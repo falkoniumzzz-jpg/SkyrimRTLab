@@ -17,6 +17,12 @@ from common import ROOT, WORK, OUT, LOCK, fetch, run, sha256
 from prepare import prepare
 
 DOCS_DIR = "FalkosLichtspiel CS19 RT Docs"
+RELEASE_DOCS_DIR = "FalkosLichtspiel Docs"
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+# A tag "v<VERSION>" builds the public release; every other build is marked with its commit.
+TAG = os.environ.get("GITHUB_REF_NAME", "") if os.environ.get("GITHUB_REF_TYPE") == "tag" else ""
+IS_RELEASE = TAG != ""
+DISPLAY_VERSION = VERSION if IS_RELEASE else f"{VERSION}+{os.environ.get('GITHUB_SHA', 'local')[:7]}"
 # Debug-only feature from the RT branch: compiled in, but not shipped/loaded.
 # Inverse Square Lighting is not shipped on purpose (Falko, 06.11.): without its ini the
 # feature never loads, no light gets the ISL flag, and CER uses the vanilla falloff too.
@@ -143,7 +149,8 @@ def build_cs(cs, vs):
         "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_FLAGS=/EHsc",
         # Exactly this value: FidelityFX-SDK detects x64 under Ninja by string equality.
         "-DCMAKE_EXE_LINKER_FLAGS=/machine:x64",
-        "-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe"]
+        "-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe",
+        f"-DFALKOSLICHTSPIEL_VERSION={DISPLAY_VERSION}"]
     run("cs-configure", ["cmake", "-S", cs, "-B", build, "-G", "Ninja", *options], env=env)
     try:
         run("cs-build", ["cmake", "--build", build, "--target", "CommunityShaders", "--parallel", "4", "--", "-k", "0"], env=env)
@@ -272,9 +279,40 @@ def mo2_package(runtime, output):
         raise RuntimeError(f"Invalid MO2 layout, missing={missing}")
 
 
+def release_packages(runtime):
+    """Nexus/GitHub release: game files at the root, English docs + licenses, no PDBs and no test notes.
+    The PDBs go into a separate optional archive (readable Crash Logger logs)."""
+    data = runtime / "Data"
+    name = f"FalkosLichtspiel-{VERSION}"
+    main_zip, pdb_zip = OUT / f"{name}.zip", OUT / f"{name}-PDBs.zip"
+    docs = {ROOT / "release/README.md": "README.md", ROOT / "release/CHANGELOG.md": "CHANGELOG.md",
+        ROOT / "sources.lock.json": "sources.lock.json"}
+    with zipfile.ZipFile(main_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z, \
+            zipfile.ZipFile(pdb_zip, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zp:
+        for p in sorted(data.rglob("*")):
+            if p.is_file():
+                (zp if p.suffix.lower() == ".pdb" else z).write(p, p.relative_to(data).as_posix())
+        for src, dest in docs.items():
+            z.write(src, f"{RELEASE_DOCS_DIR}/{dest}")
+        for p in sorted((runtime / "licenses").rglob("*")):
+            if p.is_file():
+                z.write(p, (Path(RELEASE_DOCS_DIR) / p.relative_to(runtime)).as_posix())
+    with zipfile.ZipFile(main_zip) as z:
+        names = set(z.namelist())
+        if z.testzip():
+            raise RuntimeError("Corrupt release archive")
+    lowered = [n.lower() for n in names]
+    if "SKSE/Plugins/CommunityShaders.dll" not in names or any(n.endswith(".pdb") for n in lowered) \
+            or any("testing_de" in n or "community shaders logo" in n or n.startswith("data/") for n in lowered):
+        raise RuntimeError("Invalid release archive layout")
+    shutil.copy2(OUT / "Corresponding-Source.zip", OUT / f"{name}-Source.zip")
+
+
 def main():
     if os.name != "nt":
         raise RuntimeError("Full build requires Windows/MSVC. Use the GitHub Actions workflow.")
+    if IS_RELEASE and TAG != f"v{VERSION}":
+        raise RuntimeError(f"Tag {TAG} does not match cs19rt/VERSION ({VERSION}); expected v{VERSION}")
     OUT.mkdir(parents=True, exist_ok=True)
     dxc, generator, vs = tools()
     cs, cer = prepare()
@@ -287,6 +325,7 @@ def main():
     docs_and_licenses(cs, cer, {"cs": cs_build, "cer": cer_build})
     corresponding_source()
     mo2_package(OUT / "runtime", OUT / "FalkosLichtspiel-CS19-RT-MO2.zip")
+    release_packages(OUT / "runtime")
     (OUT / "BUILD-STATUS.txt").write_text("BUILD PASSED. Skyrim runtime and GPU execution NOT tested by CI.\n", encoding="utf-8")
 
 

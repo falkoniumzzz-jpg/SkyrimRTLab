@@ -1,8 +1,19 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 430e9a9..27e0e29 100644
+index 430e9a9..7b63021 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -167,11 +167,18 @@ target_link_libraries(
+@@ -74,6 +74,10 @@ else()
+     set(GIT_DESCRIBE "unknown")
+ endif()
+ message("\tBuild version: ${GIT_DESCRIBE}")
++if(NOT DEFINED FALKOSLICHTSPIEL_VERSION OR FALKOSLICHTSPIEL_VERSION STREQUAL "")
++    set(FALKOSLICHTSPIEL_VERSION "dev")
++endif()
++message("\tFalkosLichtspiel version: ${FALKOSLICHTSPIEL_VERSION}")
+ 
+ # #######################################################################################################################
+ # # Add CMake features
+@@ -167,11 +171,18 @@ target_link_libraries(
          windowscodecs
  )
  
@@ -23,6 +34,18 @@ index 430e9a9..27e0e29 100644
  endif()
  # https://gitlab.kitware.com/cmake/cmake/-/issues/24922#note_1371990
  if(MSVC_VERSION GREATER_EQUAL 1936 AND MSVC_IDE) # 17.6+
+diff --git a/cmake/Plugin.h.in b/cmake/Plugin.h.in
+index 569ef88..217df41 100644
+--- a/cmake/Plugin.h.in
++++ b/cmake/Plugin.h.in
+@@ -20,4 +20,7 @@ namespace Plugin
+ 	/// Full git describe string, e.g. "v1.4.11", "v1.4.11-3-gabcdef1", "v1.4.11-3-gabcdef1-dirty".
+ 	/// Matches "v{VERSION}" exactly on a clean tagged release build.
+ 	inline constexpr auto BUILD_DESCRIBE = "@GIT_DESCRIBE@"sv;
++
++	/// FalkosLichtspiel release version (set by the build, e.g. "0.1.0 Beta"); VERSION stays the CS base version.
++	inline constexpr auto FALKOS_VERSION = "@FALKOSLICHTSPIEL_VERSION@"sv;
+ }
 diff --git a/features/Cloud Relight/Shaders/CloudRelight/CloudRelight.hlsli b/features/Cloud Relight/Shaders/CloudRelight/CloudRelight.hlsli
 new file mode 100644
 index 0000000..fc5684f
@@ -9838,15 +9861,18 @@ index 66d5bb3..96270bc 100644
 +	uint CubemapResolution();
  }
 diff --git a/src/Menu.cpp b/src/Menu.cpp
-index 7c7b736..39521f8 100644
+index 7c7b736..990e713 100644
 --- a/src/Menu.cpp
 +++ b/src/Menu.cpp
-@@ -774,7 +774,7 @@ void Menu::DrawSettings()
+@@ -772,9 +772,8 @@ void Menu::DrawSettings()
+ 	ImGui::SetNextWindowPos(Util::GetNativeViewportSizeScaled(0.5f), layoutCond, ImVec2(0.5f, 0.5f));
+ 	ImGui::SetNextWindowSize(Util::GetNativeViewportSizeScaled(0.8f), layoutCond);
  	resetLayout = false;
- 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
- 	auto expectedTag = std::format("v{}", versionStr);
+-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+-	auto expectedTag = std::format("v{}", versionStr);
 -	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Community Shaders {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Community Shaders {version} [{build}]");
-+	auto displayTitle = Plugin::BUILD_DESCRIBE == expectedTag ? I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Falkos Lichtspiel {version}") : I18n::GetSingleton()->Format("menu.window_title_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Falkos Lichtspiel {version} [{build}]");
++	auto versionStr = std::format("{} (CS {})", Plugin::FALKOS_VERSION, Util::GetFormattedVersion(Plugin::VERSION));
++	auto displayTitle = I18n::GetSingleton()->Format("menu.window_title", { { "version", versionStr } }, "Falkos Lichtspiel {version}");
  	// Use ### to keep a stable window ID regardless of build suffix, preserving docking state
  	auto title = std::format("{}###CommunityShaders", displayTitle);
  
@@ -9891,19 +9917,23 @@ index 79f7f9c..25ffe47 100644
  	bool partialPrecision = globals::state->enablePartialPrecision.load(std::memory_order_relaxed);
  	if (ImGui::Checkbox(T("menu.advanced.half_precision", "Half Precision (Partial Precision)"), &partialPrecision)) {
 diff --git a/src/Menu/HomePageRenderer.cpp b/src/Menu/HomePageRenderer.cpp
-index ea5716f..ea9c500 100644
+index ea5716f..998319c 100644
 --- a/src/Menu/HomePageRenderer.cpp
 +++ b/src/Menu/HomePageRenderer.cpp
-@@ -66,7 +66,7 @@ void HomePageRenderer::RenderWelcomeSection()
- 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
- 	auto expectedTag = std::format("v{}", versionStr);
+@@ -63,10 +63,9 @@ void HomePageRenderer::RenderWelcomeSection()
+ 	}
+ 
+ 	ImVec2 windowSize = ImGui::GetWindowSize();
+-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+-	auto expectedTag = std::format("v{}", versionStr);
++	auto versionStr = std::format("{} (CS {})", Plugin::FALKOS_VERSION, Util::GetFormattedVersion(Plugin::VERSION));
  	auto* i18n = I18n::GetSingleton();
 -	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Community Shaders {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Community Shaders {version} [{build}]");
-+	std::string titleWithVersion = Plugin::BUILD_DESCRIBE == expectedTag ? i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Falkos Lichtspiel {version}") : i18n->Format("menu.home.welcome_dev", { { "version", versionStr }, { "build", std::string(Plugin::BUILD_DESCRIBE) } }, "Welcome to Falkos Lichtspiel {version} [{build}]");
++	std::string titleWithVersion = i18n->Format("menu.home.welcome", { { "version", versionStr } }, "Welcome to Falkos Lichtspiel {version}");
  	ImVec2 titleSize = ImGui::CalcTextSize(titleWithVersion.c_str());
  	ImGui::SetCursorPosX((windowSize.x - titleSize.x) * 0.5f);
  	ImGui::Text("%s", titleWithVersion.c_str());
-@@ -83,7 +83,7 @@ void HomePageRenderer::RenderWelcomeSection()
+@@ -83,7 +82,7 @@ void HomePageRenderer::RenderWelcomeSection()
  
  	// Intro text - centered
  	const char* introText = T("menu.home.intro",
@@ -9912,7 +9942,102 @@ index ea5716f..ea9c500 100644
  		"This comprehensive collection of features brings modern rendering techniques\n"
  		"to enhance your visual experience.");
  	ImVec2 introSize = ImGui::CalcTextSize(introText);
-@@ -190,10 +190,10 @@ void HomePageRenderer::RenderFAQSection()
+@@ -92,54 +91,14 @@ void HomePageRenderer::RenderWelcomeSection()
+ 
+ 	ImGui::Spacing();
+ 
+-	// Discord banner - centered with proper error checking
+-	auto menu = Menu::GetSingleton();
+-	bool discordIconAvailable = false;
+-
+-	// Check if menu exists, has icons, and Discord icon is loaded
+-	if (menu && menu->uiIcons.discord.texture != nullptr &&
+-		menu->uiIcons.discord.size.x > 0 && menu->uiIcons.discord.size.y > 0) {
+-		discordIconAvailable = true;
+-	}
+-
+-	if (discordIconAvailable) {
+-		// Calculate scaled icon size based on window width, with min/max constraints
+-		ImVec2 originalSize = ImVec2(menu->uiIcons.discord.size.x, menu->uiIcons.discord.size.y);
+-
+-		// Compute width based on window size with constraints and padding (handles very small windows)
+-		float ratioWidth = windowSize.x * DISCORD_BANNER_TARGET_WIDTH_RATIO;
+-		float aspectRatio = originalSize.y / originalSize.x;
+-		float maxAllowed = std::max(1.0f, windowSize.x - DISCORD_BANNER_PADDING_MARGIN);
+-		float upperBound = std::min(DISCORD_BANNER_MAX_WIDTH, maxAllowed);
+-		float lowerBound = std::min(DISCORD_BANNER_MIN_WIDTH, upperBound);
+-		float targetWidth = std::clamp(ratioWidth, lowerBound, upperBound);
+-
+-		ImVec2 iconSize = ImVec2(targetWidth, targetWidth * aspectRatio);
+-		ImGui::SetCursorPosX((windowSize.x - iconSize.x) * 0.5f);
+-
+-		// Push style to remove border
+-		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));                     // Transparent background
+-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.1f, 0.1f, 0.1f, 0.3f));  // Subtle hover
+-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));   // Subtle click
+-
+-		if (ImGui::ImageButton("##DiscordButton", menu->uiIcons.discord.texture, iconSize)) {
+-			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+-		}
+-
+-		// Pop the style changes
+-		ImGui::PopStyleColor(3);
+-		ImGui::PopStyleVar();
+-
+-		Util::AddTooltip(T("menu.home.join_discord", "Join our Discord"));
+-	} else {
+-		// Fallback button when Discord icon is not available
+-		float buttonWidth = DISCORD_BANNER_MIN_WIDTH * scale;
++	// Feedback button - FalkosLichtspiel bugs go to its own issue tracker, not to the Community Shaders Discord.
++	{
++		float buttonWidth = std::min(DISCORD_BANNER_MAX_WIDTH, std::max(DISCORD_BANNER_MIN_WIDTH * scale, windowSize.x * 0.4f));
+ 		ImGui::SetCursorPosX((windowSize.x - buttonWidth) * 0.5f);
+-		if (ImGui::Button(T("menu.home.join_discord", "Join our Discord"), ImVec2(buttonWidth, 0))) {
+-			ShellExecuteA(NULL, "open", DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
++		if (ImGui::Button(T("menu.home.report_issue", "Report a bug / give feedback (GitHub)"), ImVec2(buttonWidth, 0))) {
++			ShellExecuteA(NULL, "open", ISSUES_URL, NULL, NULL, SW_SHOWNORMAL);
+ 		}
+-		Util::AddTooltip(T("menu.home.join_discord", "Join our Discord"));
++		Util::AddTooltip(T("menu.home.report_issue_tooltip", "Please report Falkos Lichtspiel problems here, not to the Community Shaders team."));
+ 	}
+ 
+ 	ImGui::PopStyleVar();
+@@ -157,24 +116,25 @@ void HomePageRenderer::RenderQuickLinksSection()
+ 	ImGui::Columns(4, nullptr, false);
+ 
+ 	// External links in a row
+-	if (ImGui::Button(T("menu.home.nexus_mods", "Nexus Mods"), ImVec2(-1, 0))) {
+-		ShellExecuteA(NULL, "open", "https://www.nexusmods.com/skyrimspecialedition/mods/86492", NULL, NULL, SW_SHOWNORMAL);
++	if (ImGui::Button(T("menu.home.github", "GitHub"), ImVec2(-1, 0))) {
++		ShellExecuteA(NULL, "open", REPO_URL, NULL, NULL, SW_SHOWNORMAL);
+ 	}
+ 
+ 	ImGui::NextColumn();
+-	if (ImGui::Button(T("menu.home.github", "GitHub"), ImVec2(-1, 0))) {
+-		ShellExecuteA(NULL, "open", "https://github.com/community-shaders/skyrim-community-shaders", NULL, NULL, SW_SHOWNORMAL);
++	if (ImGui::Button(T("menu.home.releases", "Downloads"), ImVec2(-1, 0))) {
++		ShellExecuteA(NULL, "open", RELEASES_URL, NULL, NULL, SW_SHOWNORMAL);
+ 	}
+ 
+ 	ImGui::NextColumn();
+-	if (ImGui::Button(T("menu.home.wiki", "Wiki"), ImVec2(-1, 0))) {
+-		ShellExecuteA(NULL, "open", "https://modding.wiki/en/skyrim/developers/community-shaders", NULL, NULL, SW_SHOWNORMAL);
++	if (ImGui::Button(T("menu.home.issues", "Bug reports"), ImVec2(-1, 0))) {
++		ShellExecuteA(NULL, "open", ISSUES_URL, NULL, NULL, SW_SHOWNORMAL);
+ 	}
+ 
+ 	ImGui::NextColumn();
+-	if (ImGui::Button(T("menu.home.dev_wiki", "Developer Wiki"), ImVec2(-1, 0))) {
+-		ShellExecuteA(NULL, "open", "https://github.com/community-shaders/skyrim-community-shaders/wiki", NULL, NULL, SW_SHOWNORMAL);
++	if (ImGui::Button(T("menu.home.upstream", "Community Shaders (base)"), ImVec2(-1, 0))) {
++		ShellExecuteA(NULL, "open", "https://github.com/community-shaders/skyrim-community-shaders", NULL, NULL, SW_SHOWNORMAL);
+ 	}
++	Util::AddTooltip(T("menu.home.upstream_tooltip", "Falkos Lichtspiel is based on Community Shaders. Do not report Falkos Lichtspiel bugs there."));
+ 
+ 	ImGui::Columns(1);
+ }
+@@ -190,10 +150,10 @@ void HomePageRenderer::RenderFAQSection()
  	ImGui::Separator();
  
  	// FAQ items with collapsible headers
@@ -9926,7 +10051,7 @@ index ea5716f..ea9c500 100644
  									 "allowing you to enable only the features you want while maintaining good performance."));
  	}
  
-@@ -225,30 +225,27 @@ void HomePageRenderer::RenderFAQSection()
+@@ -225,30 +185,27 @@ void HomePageRenderer::RenderFAQSection()
  									 "tab also includes upscaling options that can improve performance."));
  	}
  
@@ -9964,7 +10089,7 @@ index ea5716f..ea9c500 100644
  									 "the source code, report issues, suggest features, and contribute to the project. "
  									 "The project is licensed under GPL, ensuring it remains free and open for everyone."
  									 " Branding materials and assets (icons, nexus branding, typography, etc) are not covered by the GPL Licence."
-@@ -445,7 +442,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
+@@ -445,7 +402,7 @@ void HomePageRenderer::RenderFirstTimeSetupDialog()
  
  	// Version text - two lines, both centered (reduced spacing between lines)
  	const char* versionLine1 = T("menu.setup.new_install_line1", "This appears to be a new install, update, or");
@@ -9973,16 +10098,34 @@ index ea5716f..ea9c500 100644
  
  	centerText(versionLine1);
  	ImGui::Text("%s", versionLine1);
+diff --git a/src/Menu/HomePageRenderer.h b/src/Menu/HomePageRenderer.h
+index c98fff7..c703c6b 100644
+--- a/src/Menu/HomePageRenderer.h
++++ b/src/Menu/HomePageRenderer.h
+@@ -14,7 +14,9 @@ class HomePageRenderer
+ {
+ public:
+ 	// Constants
+-	static constexpr const char* DISCORD_URL = "https://discord.com/invite/nkrQybAsyy";
++	static constexpr const char* REPO_URL = "https://github.com/falkoniumzzz-jpg/SkyrimRTLab";
++	static constexpr const char* ISSUES_URL = "https://github.com/falkoniumzzz-jpg/SkyrimRTLab/issues";
++	static constexpr const char* RELEASES_URL = "https://github.com/falkoniumzzz-jpg/SkyrimRTLab/releases";
+ 	static constexpr float TITLE_FONT_SCALE = 2.0f;
+ 	static constexpr float HOTKEY_TEXT_SCALE = 1.6f;
+ 	static constexpr float HOTKEY_TEXT_SCALE_CAPTURING = 2.0f;
 diff --git a/src/Menu/MenuHeaderRenderer.cpp b/src/Menu/MenuHeaderRenderer.cpp
-index 7b564eb..8dca58e 100644
+index 7b564eb..7f07c17 100644
 --- a/src/Menu/MenuHeaderRenderer.cpp
 +++ b/src/Menu/MenuHeaderRenderer.cpp
-@@ -26,7 +26,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
+@@ -24,9 +24,8 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
+ 		return;
+ 	}
  
- 	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
- 	auto expectedTag = std::format("v{}", versionStr);
+-	auto versionStr = Util::GetFormattedVersion(Plugin::VERSION);
+-	auto expectedTag = std::format("v{}", versionStr);
 -	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Community Shaders {}", versionStr) : std::format("Community Shaders {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
-+	auto title = Plugin::BUILD_DESCRIBE == expectedTag ? std::format("Falkos Lichtspiel {}", versionStr) : std::format("Falkos Lichtspiel {} [{}]", versionStr, Plugin::BUILD_DESCRIBE);
++	auto versionStr = std::format("{} (CS {})", Plugin::FALKOS_VERSION, Util::GetFormattedVersion(Plugin::VERSION));
++	auto title = std::format("Falkos Lichtspiel {}", versionStr);
  	auto actionIcons = BuildActionIcons(canShowIcons, uiIcons);
  
  	if (isDocked) {
