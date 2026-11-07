@@ -1006,7 +1006,7 @@ index 0000000..000b60a
 +Version = 1-0-0
 diff --git a/include/CreationEngineRaytracing.h b/include/CreationEngineRaytracing.h
 new file mode 100644
-index 0000000..243164b
+index 0000000..9e6f3fe
 --- /dev/null
 +++ b/include/CreationEngineRaytracing.h
 @@ -0,0 +1,598 @@
@@ -1579,7 +1579,7 @@ index 0000000..243164b
 +		}
 +
 +        auto stamp = reinterpret_cast<uint32_t (*)()>(GetProcAddress(handle, "GetShadowLabABI"));
-+        if (!stamp || stamp() != 0x20261107u) {
++        if (!stamp || stamp() != 0x20261108u) {
 +            logger::critical("ShadowLab: backend pair mismatch; refusing initialization");
 +            handle = nullptr;
 +            return;
@@ -2546,10 +2546,10 @@ index 4dd0105..84a1153 100644
  
  	namespace ExtraFeatureFlags
 diff --git a/package/Shaders/Common/SharedData.hlsli b/package/Shaders/Common/SharedData.hlsli
-index 8ae0643..ccf7560 100644
+index 8ae0643..477ac4b 100644
 --- a/package/Shaders/Common/SharedData.hlsli
 +++ b/package/Shaders/Common/SharedData.hlsli
-@@ -334,6 +334,17 @@ namespace SharedData
+@@ -334,6 +334,18 @@ namespace SharedData
  		float2 pad0;
  	};
  
@@ -2561,13 +2561,14 @@ index 8ae0643..ccf7560 100644
 +		uint Albedo;
 +		uint PathTracing;
 +		uint AmbientOcclusion;  // FalkosLichtspiel: RT AO in the deferred composite
-+		uint2 _padding;
++		uint RTLights;          // FalkosLichtspiel: deferred pixels skip raster point lights (lit by RT)
++		uint _padding;
 +	};
 +
  	struct TruePBRSettings
  	{
  		float VertexAOStrength;
-@@ -351,6 +362,47 @@ namespace SharedData
+@@ -351,6 +363,47 @@ namespace SharedData
  		float4 wetParams;
  	};
  
@@ -2615,7 +2616,7 @@ index 8ae0643..ccf7560 100644
  	cbuffer FeatureData : register(b6)
  	{
  		GrassLightingSettings grassLightingSettings;
-@@ -370,8 +422,12 @@ namespace SharedData
+@@ -370,8 +423,12 @@ namespace SharedData
  		ENBSettings enbSettings;
  		TerrainBlendingSettings terrainBlendingSettings;
  		ExponentialHeightFogSettings exponentialHeightFogSettings;
@@ -2629,7 +2630,7 @@ index 8ae0643..ccf7560 100644
  
  	Texture2D<float4> DepthTexture : register(t17);
 diff --git a/package/Shaders/DeferredCompositeCS.hlsl b/package/Shaders/DeferredCompositeCS.hlsl
-index c46430a..812e8bc 100644
+index c46430a..a213497 100644
 --- a/package/Shaders/DeferredCompositeCS.hlsl
 +++ b/package/Shaders/DeferredCompositeCS.hlsl
 @@ -46,11 +46,11 @@ Texture2D<float4> SsgiSpecularTexture : register(t13);
@@ -2651,7 +2652,7 @@ index c46430a..812e8bc 100644
  #endif
  
 +#if defined(RAYTRACING)
-+// FalkosLichtspiel: raytraced AO from the raster hybrid modes (1 = open).
++// FalkosLichtspiel: raytraced AO from the raster hybrid modes in w (1 = open).
 +Texture2D<float4> RTAmbientOcclusionTexture : register(t16);
 +#endif
 +
@@ -2680,7 +2681,7 @@ index c46430a..812e8bc 100644
 +	// FalkosLichtspiel: RT AO replaces the screen-space AO term (SSGI indirect light stays).
 +	[branch] if (SharedData::raytracingSettings.AmbientOcclusion)
 +	{
-+		ssgiAo = saturate(RTAmbientOcclusionTexture[dispatchID.xy].x);
++		ssgiAo = saturate(RTAmbientOcclusionTexture[dispatchID.xy].w);
 +		applyAo = true;
 +	}
 +#	endif
@@ -2732,7 +2733,7 @@ index c46430a..812e8bc 100644
  
  	color = Color::IrradianceToGamma(color);
 diff --git a/package/Shaders/Lighting.hlsl b/package/Shaders/Lighting.hlsl
-index ab34912..559d177 100644
+index ab34912..bff2462 100644
 --- a/package/Shaders/Lighting.hlsl
 +++ b/package/Shaders/Lighting.hlsl
 @@ -13,6 +13,8 @@
@@ -2893,7 +2894,7 @@ index ab34912..559d177 100644
  				}
  
  #			if defined(CREATOR)
-@@ -2015,16 +2087,47 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2015,7 +2087,39 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  				material.Roughness = lerp(material.Roughness, complexMaterialRoughness, complexMaterial);
  				material.F0 = lerp(material.F0, complexSpecular, complexMaterial);
  #			endif
@@ -2919,22 +2920,21 @@ index ab34912..559d177 100644
 +#				endif
 +				}
 +#			endif
- 			}
- 		}
- #		endif
- 
++			}
++		}
++#		endif
++
 +#		if defined(VANILLA_FRESNEL) && !defined(TRUE_PBR)
 +		if (enableVanillaFresnel) {
 +			if (isEyeMaterial && SharedData::vanillaFresnelSettings.EnableEyeSpecialHandling) {
 +				material.F0 = 0.027;
 +				material.Roughness = 0.1;
-+			}
+ 			}
 +			material.Roughness = clamp(material.Roughness * SharedData::vanillaFresnelSettings.RoughnessMultiplier, 0.04, 1.0);
-+		}
-+#		endif
-+
- 		if (!dynamicCubemap) {
- 			float3 envColorBase = Color::SkyrimGammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
+ 		}
+ #		endif
+ 
+@@ -2024,7 +2128,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  			envColor = envColorBase.xyz * envMask;
  		}
  	}
@@ -2950,7 +2950,34 @@ index ab34912..559d177 100644
  
  #	if defined(EXP_HEIGHT_FOG)
  	if (SharedData::exponentialHeightFogSettings.enabled) {
-@@ -2560,6 +2664,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2309,7 +2413,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 
+ #	if !defined(LOD)
+ #		if !defined(LIGHT_LIMIT_FIX)
+-	[loop] for (uint lightIndex = 0; lightIndex < numLights; lightIndex++)
++	uint rasterPointLights = numLights;
++#			if defined(DEFERRED)
++	// FalkosLichtspiel RT Lights: the backend lights deferred pixels (with shadows).
++	if (SharedData::raytracingSettings.RTLights && inWorld)
++		rasterPointLights = 0;
++#			endif
++	[loop] for (uint lightIndex = 0; lightIndex < rasterPointLights; lightIndex++)
+ 	{
+ 		float3 lightDirection = PointLightPosition[lightIndex].xyz - input.WorldPosition.xyz;
+ 		float lightDist = length(lightDirection);
+@@ -2375,6 +2485,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 		totalLightCount += numClusteredLights;
+ 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
+ 	}
++#			if defined(DEFERRED)
++	// FalkosLichtspiel RT Lights: the backend lights deferred pixels (with shadows).
++	if (SharedData::raytracingSettings.RTLights && inWorld)
++		totalLightCount = 0;
++#			endif
+ 
+ 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
+ 	{
+@@ -2560,6 +2675,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #	endif  // MULTI_LAYER_PARALLAX
  
  	float3 ambientNormal = worldNormal.xyz;
@@ -2962,7 +2989,7 @@ index ab34912..559d177 100644
  #	if defined(HAIR) && defined(CS_HAIR)
  	if (SharedData::hairSpecularSettings.Enabled) {
  		if (SharedData::hairSpecularSettings.HairMode == 1)
-@@ -2580,6 +2689,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2580,6 +2700,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	}
  #	endif
  
@@ -2973,7 +3000,7 @@ index ab34912..559d177 100644
  #	if defined(LANDSCAPE)
  	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
  		input.Color.xyz = 1;
-@@ -2673,7 +2786,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2673,7 +2797,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		endif
  #	endif
  #	if defined(ENVMAP) || defined(MULTI_LAYER_PARALLAX) || defined(EYE)
@@ -2985,7 +3012,7 @@ index ab34912..559d177 100644
  #	endif
  
  #	if defined(SPECULAR) && !defined(TRUE_PBR)
-@@ -2716,12 +2832,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2716,12 +2843,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		if defined(DYNAMIC_CUBEMAPS)
  	if (!dynamicCubemap)
  #		endif
@@ -3006,7 +3033,7 @@ index ab34912..559d177 100644
  #	endif  // defined (EMAT) && defined(ENVMAP)
  
  #	if defined(LOD_LAND_BLEND) && defined(TRUE_PBR)
-@@ -2970,7 +3092,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2970,7 +3103,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  
  	psout.MotionVectors.zw = float2(0.0, psout.Diffuse.w);
  	psout.Specular = float4(specularColor, psout.Diffuse.w);
@@ -3019,7 +3046,7 @@ index ab34912..559d177 100644
  
  #		if defined(WETNESS_EFFECTS)
  	indirectLobeWeights.specular += wetnessReflectance;
-@@ -2982,7 +3109,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2982,7 +3120,34 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  #		endif
  
  	psout.Reflectance = float4(indirectLobeWeights.specular, psout.Diffuse.w);
@@ -3055,7 +3082,7 @@ index ab34912..559d177 100644
  
  #		if defined(SNOW)
  #			if defined(TRUE_PBR)
-@@ -2992,7 +3146,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -2992,7 +3157,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Parameters.x = Color::RGBToLuminanceAlternative(lightsSpecularColor);
  #			endif
  	psout.Parameters.w = psout.Diffuse.w;
@@ -3064,7 +3091,7 @@ index ab34912..559d177 100644
  
  	float masksZ = Color::RGBToYCoCg(directionalAmbientColor).x;
  
-@@ -3002,13 +3156,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+@@ -3002,13 +3167,19 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
  #		endif
  
@@ -3087,7 +3114,7 @@ index ab34912..559d177 100644
  #	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
  	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
 diff --git a/package/Shaders/RunGrass.hlsl b/package/Shaders/RunGrass.hlsl
-index fb3fdb8..c18c0ab 100644
+index fb3fdb8..0ccb72d 100644
 --- a/package/Shaders/RunGrass.hlsl
 +++ b/package/Shaders/RunGrass.hlsl
 @@ -396,6 +396,7 @@ cbuffer PerMaterial : register(b1)
@@ -3098,6 +3125,15 @@ index fb3fdb8..c18c0ab 100644
  
  float GetSoftLightMultiplier(float angle, float rolloff)
  {
+@@ -529,7 +530,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ #				if defined(LIGHT_LIMIT_FIX)
+ 	uint clusterIndex = 0;
+ 	uint lightCount = 0;
+-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
++	if (!SharedData::raytracingSettings.RTLights && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {  // FalkosLichtspiel RT Lights
+ 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+ 		if (lightCount) {
+ 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 @@ -598,7 +599,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  	psout.Specular = float4(totalLighting.specular, 1);
  	psout.Reflectance = float4(indirectLobes.specular, 1);
@@ -3121,6 +3157,15 @@ index fb3fdb8..c18c0ab 100644
  
  	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
  	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+@@ -782,7 +791,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+ 	uint clusterIndex = 0;
+ 	uint lightCount = 0;
+ 
+-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
++	if (!SharedData::raytracingSettings.RTLights && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {  // FalkosLichtspiel RT Lights
+ 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+ 		if (lightCount) {
+ 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 @@ -825,6 +834,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
  				float3 lightDiffuseColor;
  
@@ -3130,6 +3175,15 @@ index fb3fdb8..c18c0ab 100644
  
  				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
  
+@@ -961,7 +972,7 @@ PS_OUTPUT main(PS_INPUT input)
+ 	uint clusterIndex = 0;
+ 	uint lightCount = 0;
+ 
+-	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
++	if (!SharedData::raytracingSettings.RTLights && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {  // FalkosLichtspiel RT Lights
+ 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
+ 		if (lightCount) {
+ 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 diff --git a/package/Shaders/Sky.hlsl b/package/Shaders/Sky.hlsl
 index ec80a86..8f1472d 100644
 --- a/package/Shaders/Sky.hlsl
@@ -4572,10 +4626,10 @@ index e20e3af..b3e3aa2 100644
  	DrawCallRow otherRow = {
 diff --git a/src/Features/Raytracing.cpp b/src/Features/Raytracing.cpp
 new file mode 100644
-index 0000000..774f0db
+index 0000000..a76e962
 --- /dev/null
 +++ b/src/Features/Raytracing.cpp
-@@ -0,0 +1,1756 @@
+@@ -0,0 +1,1764 @@
 +#include "Raytracing.h"
 +
 +#include "Globals.h"
@@ -4761,13 +4815,13 @@ index 0000000..774f0db
 +			T(TKEY("mode_path_tracing"), "Path Tracing"),
 +			T(TKEY("mode_path_debug"), "Debug"),
 +			T(TKEY("mode_rt_ao"), "RT AO"),
-+			nullptr,  // RT Lights: later round
-+			nullptr,  // RT Lights + AO: later round
++			T(TKEY("mode_rt_lights"), "RT Lights"),
++			T(TKEY("mode_rt_lights_ao"), "RT Lights + AO"),
 +		});
 +
 +	if (IsRasterHybridMode(settings.CreationEngineRaytracingSettings.GeneralSettings.Mode)) {
-+		ImGui::TextWrapped("%s", T(TKEY("mode_rt_ao_info"),
-+			"RT AO keeps the raster lighting and replaces screen-space AO with short raytraced occlusion rays. It uses its own denoiser; the denoiser choice below does not apply."));
++		ImGui::TextWrapped("%s", T(TKEY("mode_rt_hybrid_info"),
++			"These modes keep the raster sun, ambient and reflections. RT AO replaces screen-space AO with short raytraced occlusion rays. RT Lights traces all local lights (fires, candles, torches, magic, lamps) with real shadows for the strongest lights per pixel. The denoiser choice below does not apply."));
 +	}
 +
 +	DrawEnumRadio(
@@ -5864,6 +5918,11 @@ index 0000000..774f0db
 +	CompileShaders();
 +}
 +
++bool Raytracing::RTLightsActive() const
++{
++	return initialized && !forcedDisabled && settings.CreationEngineRaytracingSettings.Enabled && HasRTLights(Mode());
++}
++
 +ID3D11ShaderResourceView* Raytracing::GetAmbientOcclusionSRV() const
 +{
 +	if (!initialized || forcedDisabled || !settings.CreationEngineRaytracingSettings.Enabled || !HasRTAmbientOcclusion(Mode()))
@@ -5884,14 +5943,16 @@ index 0000000..774f0db
 +
 +	// FalkosLichtspiel: the raster hybrid modes keep the vanilla/CS ambient, reflections and albedo.
 +	const bool rtReplacesAmbient = enabled && !IsRasterHybridMode(mode);
++	const bool rtLights = RTLightsActive();
 +
 +	return {
 +		.InteriorDirectional = rtReplacesAmbient ? 0.0f : 1.0f,
 +		.Ambient = rtReplacesAmbient ? 0.0f : 1.0f,
 +		.EnvMap = rtReplacesAmbient ? 0.0f : 1.0f,
-+		.Albedo = rtReplacesAmbient ? 1u : 0u,
++		.Albedo = (rtReplacesAmbient || rtLights) ? 1u : 0u,  // RT Lights shade the true albedo
 +		.PathTracing = pathTracingEnabled ? 1u : 0u,
 +		.AmbientOcclusion = GetAmbientOcclusionSRV() ? 1u : 0u,
++		.RTLights = rtLights ? 1u : 0u,
 +	};
 +}
 +
@@ -6123,7 +6184,8 @@ index 0000000..774f0db
 +
 +	auto* context = globals::d3d::context;
 +
-+	if (globalIllumation) {
++	// FalkosLichtspiel: RT Lights radiance (rgb of the shared main texture) is added the same way as GI.
++	if (globalIllumation || HasRTLights(mode)) {
 +		// Add global illumination result to kMain
 +		{
 +			context->CSSetShader(giCompositeCS.get(), nullptr, 0);
@@ -6334,10 +6396,10 @@ index 0000000..774f0db
 +}
 diff --git a/src/Features/Raytracing.h b/src/Features/Raytracing.h
 new file mode 100644
-index 0000000..f4894a6
+index 0000000..1d57620
 --- /dev/null
 +++ b/src/Features/Raytracing.h
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,441 @@
 +#pragma once
 +
 +#include <array>
@@ -6492,6 +6554,15 @@ index 0000000..f4894a6
 +		       a_mode == CreationEngineRaytracing::Mode::RTLightsAO;
 +	}
 +
++	static constexpr bool HasRTLights(CreationEngineRaytracing::Mode a_mode)
++	{
++		return a_mode == CreationEngineRaytracing::Mode::RTLights ||
++		       a_mode == CreationEngineRaytracing::Mode::RTLightsAO;
++	}
++
++	// True when the backend runs and lights the deferred pixels itself (raster skips its point lights).
++	bool RTLightsActive() const;
++
 +	// RT AO output for the deferred composite, or nullptr when RT AO is not active this frame.
 +	ID3D11ShaderResourceView* GetAmbientOcclusionSRV() const;
 +
@@ -6585,7 +6656,7 @@ index 0000000..f4894a6
 +		uint Albedo;
 +		uint PathTracing;
 +		uint AmbientOcclusion;  // FalkosLichtspiel: deferred composite applies RT AO (t16)
-+		uint _padding1;
++		uint RTLights;          // FalkosLichtspiel: deferred pixels skip raster point lights
 +		uint _padding2;
 +	};
 +	STATIC_ASSERT_ALIGNAS_16(SharedData);

@@ -25,5 +25,5 @@
   },
   "dxc_url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/dxc_2025_07_14.zip",
   "dxc_sha256": "9ad895a6b039e3a8f8c22a1009f866800b840a74b50db9218d13319e215ea8a4",
-  "abi": "20261107"
+  "abi": "20261108"
 }

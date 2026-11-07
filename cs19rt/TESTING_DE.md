@@ -95,23 +95,25 @@ mitgeliefert: Lichter nutzen den Vanilla-Abfall, im Raster und im RT.
    *Disable at Boot* steht Inverse Square Lighting nicht mehr in der Liste der geladenen
    Features (`CommunityShaders.log`: „InverseSquareLighting.ini failed to load“).
 
-## Neu: Modus „RT AO“ und Name „Falkos Lichtspiel“
+## RT-Hybridmodi: „RT AO“, „RT Lights“, „RT Lights + AO“
 
-**Status:** implementiert. Gebaut erst, wenn der CI-Lauf grün ist. **Im Spiel noch nicht bestätigt.**
+- **RT AO** (im Spiel bestätigt): nur die Umgebungsverdeckung kommt aus kurzen Strahlen, Rest Raster.
+- **RT Lights** (neu, **implementiert, im Spiel noch nicht bestätigt**): alle lokalen Lichter (Fackeln, Kerzen,
+  Feuer, Schmiede, Magie, Lampen) per RT. Die 4 stärksten Lichter pro Pixel werfen echte, harte Schatten
+  (mit Alpha-Test für Laub/Zäune), schwächere Lichter wirken ohne Schatten wie im Raster. Sonne, Umgebungslicht,
+  Spiegelungen und Vanilla-SSAO bleiben Raster. Transparente Objekte, Partikel und Haare behalten Raster-Licht.
+- **RT Lights + AO** (neu): beides zusammen, Vanilla-SSAO aus.
+- Menü und Meldungen heißen „Falkos Lichtspiel“ (im Spiel bestätigt).
 
-- **RT AO:** neuer Modus unter *Raytracing → Mode*. Licht, Schatten, Ambient und Spiegelungen bleiben
-  Raster wie ohne RT. Nur die Umgebungsverdeckung (Ecken, unter Möbeln, Kontaktschatten, unter Bäumen)
-  kommt aus kurzen Strahlen (ca. 1 m). Ersetzt Vanilla-SSAO, eigener Entrauscher (die Denoiser-Wahl gilt hier nicht).
-- **Menü:** Titel, Startseite, natives Menü und Meldungen heißen jetzt „Falkos Lichtspiel“.
-  DLL-, Ordner- und Einstellungsnamen bleiben, deine Presets laufen weiter.
-- „RT Lichter“ und „RT Lichter + AO“ kommen in der nächsten Runde.
-
-Test:
-1. Modus **RT AO** wählen. Innenraum (z. B. Drachenfeste) und Wald bei Tag.
-2. Ecken, Fußleisten, unter Tischen und Bäumen sollten weich abdunkeln, ohne Rauschen und ohne Halos an Kanten.
-3. Kamera schnell drehen: kurzes Nachziehen an freigelegten Stellen ist normal, dauerhaftes Schmieren nicht.
-4. FPS im Vergleich zu „None“ notieren (erwartet: wenige Prozent weniger).
-5. Hauptmenü öffnen: Steht überall „Falkos Lichtspiel“?
+Test RT Lights:
+1. Nachts in Weißlauf oder in einer Taverne (viele Kerzen, Kamin) zwischen **None** und **RT Lights** umschalten.
+   Gesamthelligkeit sollte ähnlich bleiben, neu sind Schatten von Möbeln, Säulen und Figuren.
+2. Fackel in die Hand nehmen und an einer Wand entlanglaufen: Schatten der Umgebung bewegen sich mit.
+3. Feuerzauber in der Hand / Feuerball in einen dunklen Raum: Licht mit Schatten?
+4. Achte auf Lichter, die komplett dunkel bleiben (Licht steckt in seiner eigenen Lampe/Laterne), auf
+   flackernde Schattenkanten und auf Licht, das durch Wände dringt.
+5. FPS: None, RT Lights, RT Lights + AO vergleichen, am besten in einer Stadt bei Nacht.
+6. Wenn etwas fehlt: `CreationEngineRaytracing.log`, Zeile „FalkosLichtspiel RT Lights: pipeline …“.
 
 ## Wenn das Spiel hängt (z. B. endloser Ladebildschirm)
 

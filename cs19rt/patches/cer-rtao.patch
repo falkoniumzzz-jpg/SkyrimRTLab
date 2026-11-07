@@ -1,12 +1,13 @@
 diff --git a/shaders/AOFilter.hlsl b/shaders/AOFilter.hlsl
 new file mode 100644
-index 0000000..41c52ea
+index 0000000..fc9c148
 --- /dev/null
 +++ b/shaders/AOFilter.hlsl
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,73 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// FalkosLichtspiel: edge-aware spatial filter for the raytraced AO history.
-+// Writes the final AO (1 = open) to the shared main texture for the raster composite.
++// Writes the final AO (1 = open) to w: the shared main texture (AO only) or the AO result
++// that the RT lights pass picks up (RT Lights + AO).
 +
 +#include "interop/CameraData.hlsli"
 +
@@ -31,7 +32,7 @@ index 0000000..41c52ea
 +    const float depth0 = center.y;
 +
 +    if (depth0 <= 0.0f) {
-+        Output[idx] = float4(1.0f, 1.0f, 1.0f, 1.0f);
++        Output[idx] = float4(0.0f, 0.0f, 0.0f, 1.0f);
 +        return;
 +    }
 +
@@ -74,7 +75,7 @@ index 0000000..41c52ea
 +    const float fade = saturate((depth0 - kFadeStart) / (kFadeEnd - kFadeStart));
 +    ao = lerp(saturate(ao), 1.0f, fade);
 +
-+    Output[idx] = float4(ao, ao, ao, 1.0f);
++    Output[idx] = float4(0.0f, 0.0f, 0.0f, ao);
 +}
 diff --git a/shaders/raytracing/AmbientOcclusion/RayGeneration.hlsl b/shaders/raytracing/AmbientOcclusion/RayGeneration.hlsl
 new file mode 100644
@@ -222,23 +223,248 @@ index 0000000..f4a29cf
 +
 +    Output[idx] = float4(ao, depthVS, history, 1.0f);
 +}
+diff --git a/shaders/raytracing/DirectLights/RayGeneration.hlsl b/shaders/raytracing/DirectLights/RayGeneration.hlsl
+new file mode 100644
+index 0000000..aa9aaea
+--- /dev/null
++++ b/shaders/raytracing/DirectLights/RayGeneration.hlsl
+@@ -0,0 +1,219 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: raytraced local lights for the raster lighting modes.
++// Every engine light (torches, candles, fires, magic, lamps) is evaluated on the raster
++// G-buffer with the same BSDF and falloff the GI/PT paths use. The strongest lights per
++// pixel get a hard, alpha-tested shadow ray; weaker ones are added unshadowed, like the
++// raster point lights they replace. The host skips its own point lights on deferred pixels.
++// Output: rgb = radiance (true linear, added by the host composite), a = AO (1 without AO).
++
++#include "raytracing/GlobalIllumination/Registers.hlsli"
++
++#include "include/Common.hlsli"
++#include "raytracing/include/Common.hlsli"
++#include "raytracing/include/Payload.hlsli"
++#include "raytracing/include/Geometry.hlsli"
++#include "raytracing/include/Materials/TexLODHelpers.hlsli"
++#include "include/Surface.hlsli"
++#include "include/SurfaceMaker.hlsli"
++#include "include/Lighting.hlsli"
++#include "raytracing/include/Transparency.hlsli"
++
++#if defined(WITH_AO)
++Texture2D<float4> AOResult : register(t23);  // w = AO from the RT AO pass
++#endif
++
++#ifndef RAY_FLAGS
++#   define RAY_FLAGS (RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES)
++#endif
++#ifndef INSTANCE_MASK
++#   define INSTANCE_MASK (0xFF)
++#endif
++
++#define SHADOWED_LIGHTS 4
++
++static const float kLightMargin = 12.0f;  // stop shadow rays short of the light (its own fixture)
++
++float TraceLightVisibility(float3 origin, float3 direction, float tmax, inout uint randomSeed)
++{
++    RayDesc ray;
++    ray.Origin = origin;
++    ray.Direction = direction;
++    ray.TMin = 0.0f;
++    ray.TMax = tmax;
++
++    float3 transmission = float3(1.0f, 1.0f, 1.0f);
++
++    RayQuery<RAY_FLAGS | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> rayQuery;
++    rayQuery.TraceRayInline(Scene, RAY_FLAG_NONE, INSTANCE_MASK, ray);
++
++    while (rayQuery.Proceed())
++    {
++        if (rayQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)
++        {
++            if (ConsiderTransparentMaterialShadow(
++                rayQuery.CandidateInstanceID(),
++                rayQuery.CandidateGeometryIndex(),
++                rayQuery.CandidatePrimitiveIndex(),
++                rayQuery.CandidateTriangleBarycentrics(),
++                randomSeed,
++                direction,
++                rayQuery.CandidateTriangleRayT(),
++                transmission))
++            {
++                rayQuery.CommitNonOpaqueTriangleHit();
++            }
++        }
++    }
++
++    if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
++        return 0.0f;
++
++    return saturate(dot(transmission, float3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f)));
++}
++
++[numthreads(8, 8, 1)]
++void Main(uint2 idx : SV_DispatchThreadID)
++{
++    const uint2 size = Camera.RenderSize;
++    if (any(idx >= size))
++        return;
++
++#if defined(WITH_AO)
++    const float ao = AOResult.Load(int3(idx, 0)).w;
++#else
++    const float ao = 1.0f;
++#endif
++
++    const float depth = Depth.Load(int3(idx, 0));
++    const float depthVS = ScreenToViewDepth(depth, Camera.CameraData);
++
++    [branch]
++    if (depthVS < FP_VIEW_Z || depth >= SKY_Z || Raytracing.NumLights == 0)
++    {
++        Output[idx] = float4(0.0f, 0.0f, 0.0f, ao);
++        return;
++    }
++
++    const float2 uv = float2(idx + 0.5f) / float2(size);
++    const float3 positionVS = ScreenToViewPosition(uv, depthVS, Camera.NDCToView);
++    const float3 positionCS = ViewToWorldPosition(positionVS, Camera.ViewInverse);
++    const float3 positionWS = positionCS + Camera.Position.xyz;
++    const float hitDistance = max(length(positionCS), 1e-4f);
++
++    const float4 normalRoughness = NormalRoughness.Load(int3(idx, 0));
++    float3 normalWS = normalRoughness.xyz;
++    normalWS = dot(normalWS, normalWS) > 1e-6f ? normalize(normalWS) : float3(0.0f, 0.0f, 1.0f);
++    const float roughness = saturate(normalRoughness.w);
++
++    const float3 metalnessAO = VAOMAO.Load(int3(idx, 0)).xyz;
++    const float metalness = saturate(metalnessAO.y);
++    const float materialAO = saturate(1.0f - metalnessAO.z);
++
++    float3 faceNormal = FaceNormals.Load(int3(idx, 0)) * 2.0f - 1.0f;
++    faceNormal = dot(faceNormal, faceNormal) > 1e-6f ? normalize(faceNormal) : normalWS;
++
++    float3 tangentWS, bitangentWS;
++    CreateOrthonormalBasis(normalWS, tangentWS, bitangentWS);
++
++    const float3 albedo = LLGammaToTrueLinear(Albedo.Load(int3(idx, 0)).rgb);
++
++    Surface surface = SurfaceMaker::make(positionWS, faceNormal, normalWS, tangentWS, bitangentWS, albedo, roughness, metalness, 0, materialAO);
++    BRDFContext brdfContext = BRDFContext::make(surface, -positionCS / hitDistance);
++    AdjustShadingNormal(surface, brdfContext, false, false);
++    StandardBSDF bsdf = StandardBSDF::make(surface, surface.Normal, brdfContext.ViewDirection, true);
++
++    // Shadow ray origin: reconstructed depth is imprecise, offset along the face normal.
++    const float bias = 0.75f + depthVS * 0.0015f;
++    const float3 origin = positionWS + faceNormal * bias;
++
++    float3 unshadowed = 0.0f;
++
++    float  topWeight[SHADOWED_LIGHTS];
++    float3 topRadiance[SHADOWED_LIGHTS];
++    float3 topDirection[SHADOWED_LIGHTS];
++    float  topDistance[SHADOWED_LIGHTS];
++    [unroll]
++    for (uint k = 0; k < SHADOWED_LIGHTS; k++)
++    {
++        topWeight[k] = 0.0f;
++        topRadiance[k] = 0.0f;
++        topDirection[k] = 0.0f;
++        topDistance[k] = 0.0f;
++    }
++
++    [loop]
++    for (uint i = 0; i < Raytracing.NumLights; i++)
++    {
++        Light light = Lights[i];
++        if (light.Type == LightType::Directional || light.Fade <= 0.0f)
++            continue;
++
++        float3 lightVector = light.Position - positionWS;
++        const float dist = length(lightVector);
++        if (dist <= 1e-3f || dist * light.InvRadius >= 1.0f)
++            continue;
++        const float3 lr = lightVector / dist;
++
++        const bool isLinear = (light.Flags & LightFlags::LinearLight) != 0;
++        light.Color = (half3)PointLightToLinear(light.Color, isLinear);
++
++        float lightSourceAngle = 0.005f;
++        const float atten = GetAttenuation(light, lr, dist, lightSourceAngle);
++        if (atten <= 0.0f)
++            continue;
++
++        float3 diffuse, specular;
++        EvalLight(lr, Type::Lighting, Feature::kDefault, surface, brdfContext, bsdf, diffuse, specular);
++        const float3 radiance = (diffuse + specular) * (float3)light.Color * light.Fade * atten;
++        const float weight = dot(radiance, float3(0.2126f, 0.7152f, 0.0722f));
++        if (weight <= 0.0f)
++            continue;
++
++        // Keep the strongest lights for shadow rays; the weakest one drops to unshadowed.
++        float  w = weight;
++        float3 r = radiance;
++        float3 d = lr;
++        float  t = dist;
++        [unroll]
++        for (uint k = 0; k < SHADOWED_LIGHTS; k++)
++        {
++            if (w > topWeight[k])
++            {
++                const float  sw = topWeight[k];
++                const float3 sr = topRadiance[k];
++                const float3 sd = topDirection[k];
++                const float  st = topDistance[k];
++                topWeight[k] = w;
++                topRadiance[k] = r;
++                topDirection[k] = d;
++                topDistance[k] = t;
++                w = sw;
++                r = sr;
++                d = sd;
++                t = st;
++            }
++        }
++        unshadowed += r;
++    }
++
++    uint randomSeed = InitRandomSeed(idx, size, Camera.FrameIndex);
++
++    float3 radiance = unshadowed;
++    [unroll]
++    for (uint k = 0; k < SHADOWED_LIGHTS; k++)
++    {
++        [branch]
++        if (topWeight[k] > 0.0f)
++        {
++            float3 toLight = topDirection[k] * topDistance[k] - faceNormal * bias;
++            const float lengthToLight = length(toLight);
++            const float tmax = lengthToLight - min(kLightMargin, lengthToLight * 0.5f);
++            if (tmax > 0.0f)
++                radiance += topRadiance[k] * TraceLightVisibility(origin, toLight / lengthToLight, tmax, randomSeed);
++            else
++                radiance += topRadiance[k];
++        }
++    }
++
++    Output[idx] = float4(max(radiance, 0.0f), ao);
++}
 diff --git a/src/API.cpp b/src/API.cpp
-index 1af0979..cc8d4ad 100644
+index 1af0979..71da7be 100644
 --- a/src/API.cpp
 +++ b/src/API.cpp
 @@ -1,5 +1,5 @@
  #include "API.h"
 -uint32_t GetShadowLabABI() { return 0x20261031u; }
-+uint32_t GetShadowLabABI() { return 0x20261107u; }
++uint32_t GetShadowLabABI() { return 0x20261108u; }
  #include "Scene.h"
  #include "Renderer.h"
  #include "Pass/Raytracing/Common/Accumulation.h"
 diff --git a/src/Pass/Raytracing/AmbientOcclusion.cpp b/src/Pass/Raytracing/AmbientOcclusion.cpp
 new file mode 100644
-index 0000000..04ae9a8
+index 0000000..659ffcf
 --- /dev/null
 +++ b/src/Pass/Raytracing/AmbientOcclusion.cpp
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,320 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// FalkosLichtspiel: raytraced ambient occlusion for the raster lighting modes.
 +// Pass 1 traces short alpha-tested visibility rays from the raster G-buffer and
@@ -254,8 +480,8 @@ index 0000000..04ae9a8
 +
 +namespace Pass::Raytracing
 +{
-+	AmbientOcclusion::AmbientOcclusion(Renderer* renderer, SceneTLAS* sceneTLAS)
-+		: RenderPass(renderer), m_SceneTLAS(sceneTLAS)
++	AmbientOcclusion::AmbientOcclusion(Renderer* renderer, SceneTLAS* sceneTLAS, bool writeToMain)
++		: RenderPass(renderer), m_WriteToMain(writeToMain), m_SceneTLAS(sceneTLAS)
 +	{
 +		auto device = renderer->GetDevice();
 +
@@ -334,6 +560,18 @@ index 0000000..04ae9a8
 +			const std::string name = std::format("RT AO History {}", i);
 +			desc.debugName = name.c_str();
 +			m_History[i] = device->createTexture(desc);
++		}
++
++		if (!m_WriteToMain) {
++			nvrhi::TextureDesc desc;
++			desc.width = eastl::max<uint32_t>(1u, resolution.x);
++			desc.height = eastl::max<uint32_t>(1u, resolution.y);
++			desc.format = nvrhi::Format::RGBA16_FLOAT;
++			desc.isUAV = true;
++			desc.initialState = nvrhi::ResourceStates::Common;
++			desc.keepInitialState = true;
++			desc.debugName = "RT AO Result";
++			m_Result = device->createTexture(desc);
 +		}
 +
 +		m_HistorySize = resolution;
@@ -445,15 +683,16 @@ index 0000000..04ae9a8
 +	void AmbientOcclusion::Execute(nvrhi::ICommandList* commandList)
 +	{
 +		auto* renderer = GetRenderer();
-+		auto* mainTexture = renderer->GetMainTexture();
++
++		EnsureHistory();
++
++		nvrhi::ITexture* mainTexture = m_WriteToMain ? renderer->GetMainTexture() : m_Result.Get();
 +
 +		if (!m_TracePipeline || !m_FilterPipeline) {
 +			// Without a working pipeline report "fully open" so the raster image is unchanged.
-+			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(1.f));
++			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(0.f, 0.f, 0.f, 1.f));
 +			return;
 +		}
-+
-+		EnsureHistory();
 +
 +		const uint32_t slot = renderer->GetCurrentSlot();
 +		const uint32_t current = m_Parity;
@@ -511,7 +750,7 @@ index 0000000..04ae9a8
 +		}
 +
 +		if (!traceSet || !filterSet) {
-+			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(1.f));
++			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(0.f, 0.f, 0.f, 1.f));
 +			return;
 +		}
 +
@@ -548,10 +787,10 @@ index 0000000..04ae9a8
 +}
 diff --git a/src/Pass/Raytracing/AmbientOcclusion.h b/src/Pass/Raytracing/AmbientOcclusion.h
 new file mode 100644
-index 0000000..7a93555
+index 0000000..703e8f1
 --- /dev/null
 +++ b/src/Pass/Raytracing/AmbientOcclusion.h
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,64 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// FalkosLichtspiel: raytraced ambient occlusion for the raster lighting modes.
 +#pragma once
@@ -584,6 +823,8 @@ index 0000000..7a93555
 +		eastl::array<eastl::array<nvrhi::BindingSetHandle, 2>, Constants::MAX_FRAMES_IN_FLIGHT> m_FilterSets{};
 +
 +		eastl::array<nvrhi::TextureHandle, 2> m_History{};
++		nvrhi::TextureHandle m_Result;  // AO for the RT lights pass (when not writing to Main)
++		bool m_WriteToMain = true;
 +		uint2 m_HistorySize{ 0, 0 };
 +		uint32_t m_Parity = 0;
 +		bool m_Supported = true;
@@ -601,7 +842,10 @@ index 0000000..7a93555
 +		eastl::vector<ShaderDefine> BuildDefines(const Settings& settings) const;
 +
 +	public:
-+		AmbientOcclusion(Renderer* renderer, SceneTLAS* sceneTLAS);
++		// writeToMain: AO-only mode. Otherwise the AO goes to GetResult() for the RT lights pass.
++		AmbientOcclusion(Renderer* renderer, SceneTLAS* sceneTLAS, bool writeToMain = true);
++
++		nvrhi::ITexture* GetResult() const { return m_Result; }
 +
 +		void OnTLASResized([[maybe_unused]] TopLevelAS& tlas) override { ResetBindings(); }
 +
@@ -611,43 +855,357 @@ index 0000000..7a93555
 +		virtual void Execute(nvrhi::ICommandList* commandList) override;
 +	};
 +}
+diff --git a/src/Pass/Raytracing/DirectLights.cpp b/src/Pass/Raytracing/DirectLights.cpp
+new file mode 100644
+index 0000000..56fd9cd
+--- /dev/null
++++ b/src/Pass/Raytracing/DirectLights.cpp
+@@ -0,0 +1,222 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: raytraced local lights for the raster lighting modes.
++// Evaluates all engine lights on the raster G-buffer; the strongest per pixel get an
++// alpha-tested shadow ray. Writes radiance (rgb) and AO (a) to the shared main texture.
++#include "DirectLights.h"
++#include "Renderer.h"
++#include "Scene.h"
++#include "ShaderCache.h"
++#include "Types/InstanceMask.h"
++
++namespace Pass::Raytracing
++{
++	DirectLights::DirectLights(Renderer* renderer, SceneTLAS* sceneTLAS, AmbientOcclusion* ambientOcclusion)
++		: RenderPass(renderer), m_SceneTLAS(sceneTLAS), m_AmbientOcclusion(ambientOcclusion)
++	{
++		auto device = renderer->GetDevice();
++
++		m_LinearWrapSampler = device->createSampler(
++			nvrhi::SamplerDesc()
++			.setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
++			.setAllFilters(true));
++
++		m_LinearClampSampler = device->createSampler(
++			nvrhi::SamplerDesc()
++			.setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
++			.setAllFilters(true));
++
++		m_PointWrapSampler = device->createSampler(
++			nvrhi::SamplerDesc()
++			.setAllAddressModes(nvrhi::SamplerAddressMode::Wrap)
++			.setAllFilters(false));
++
++		m_Supported = device->queryFeatureSupport(nvrhi::Feature::RayQuery);
++		if (!m_Supported)
++			logger::error("FalkosLichtspiel RT Lights: inline ray queries (DXR 1.1) are not supported, RT Lights stay off");
++
++		m_Defines = BuildDefines(Scene::GetSingleton()->m_Settings);
++
++		m_SceneTLAS->GetTopLevelAS().AddListener(this);
++	}
++
++	eastl::vector<ShaderDefine> DirectLights::BuildDefines(const Settings& settings) const
++	{
++		auto defines = Util::Shader::GetRaytracingDefines(settings, false, false);
++		defines.emplace_back(L"THREAD_GROUP_SIZE", Constants::GI_DISPATCH_THREADS);
++		// No water in shadow rays (same as GI)
++		auto instanceMask = InstanceMask::All & ~InstanceMask::Water;
++		defines.emplace_back(L"INSTANCE_MASK", instanceMask);
++		return defines;
++	}
++
++	void DirectLights::SettingsChanged(const Settings& settings)
++	{
++		auto defines = BuildDefines(settings);
++		if (defines != m_Defines) {
++			m_Defines = eastl::move(defines);
++			CreatePipeline();
++		}
++	}
++
++	void DirectLights::CreatePipeline()
++	{
++		ResetBindings();
++		m_Pipeline = nullptr;
++
++		if (!m_Supported)
++			return;
++
++		auto device = GetRenderer()->GetDevice();
++		auto* sceneGraph = Scene::GetSingleton()->GetSceneGraph();
++
++		nvrhi::BindingLayoutDesc layoutDesc;
++		layoutDesc.visibility = nvrhi::ShaderType::Compute;
++		layoutDesc.bindings = {
++			nvrhi::BindingLayoutItem::Sampler(0),
++			nvrhi::BindingLayoutItem::Sampler(1),
++			nvrhi::BindingLayoutItem::Sampler(2),
++			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
++			nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
++			nvrhi::BindingLayoutItem::VolatileConstantBuffer(2),
++			nvrhi::BindingLayoutItem::RayTracingAccelStruct(0),
++			nvrhi::BindingLayoutItem::Texture_SRV(1),
++			nvrhi::BindingLayoutItem::Texture_SRV(2),
++			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(3),
++			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(4),
++			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5),
++			nvrhi::BindingLayoutItem::Texture_SRV(6),
++			nvrhi::BindingLayoutItem::Texture_SRV(7),
++			nvrhi::BindingLayoutItem::Texture_SRV(8),
++			nvrhi::BindingLayoutItem::Texture_SRV(9),
++			nvrhi::BindingLayoutItem::Texture_SRV(10),
++			nvrhi::BindingLayoutItem::Texture_SRV(13),
++			nvrhi::BindingLayoutItem::Texture_SRV(14),
++			nvrhi::BindingLayoutItem::Texture_SRV(15),
++			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16),
++			nvrhi::BindingLayoutItem::RawBuffer_SRV(19),
++			nvrhi::BindingLayoutItem::RawBuffer_SRV(20),
++			nvrhi::BindingLayoutItem::Texture_UAV(0)
++		};
++		if (m_AmbientOcclusion)
++			layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Texture_SRV(23));  // RT AO result
++
++		m_Layout = device->createBindingLayout(layoutDesc);
++
++		auto defines = Util::Shader::GetDXCDefines(m_Defines);
++		defines.emplace_back(L"USE_RAY_QUERY", L"1");
++		if (m_AmbientOcclusion)
++			defines.emplace_back(L"WITH_AO", L"1");
++
++		auto blob = ShaderCache::GetShader(L"data/shaders/raytracing/DirectLights/RayGeneration.hlsl", defines, ShaderStage::Compute);
++		if (!blob) {
++			logger::error("FalkosLichtspiel RT Lights: shader compilation failed");
++			return;
++		}
++
++		m_Shader = device->createShader({ nvrhi::ShaderType::Compute, "RT Lights", "Main" }, blob->GetBufferPointer(), blob->GetBufferSize());
++		if (!m_Shader)
++			return;
++
++		auto pipelineDesc = nvrhi::ComputePipelineDesc()
++			.setComputeShader(m_Shader)
++			.addBindingLayout(m_Layout)
++			.addBindingLayout(sceneGraph->GetTriangleDescriptors()->m_Layout)
++			.addBindingLayout(sceneGraph->GetVertexDescriptors()->m_Layout)
++			.addBindingLayout(sceneGraph->GetMaterialDescriptors()->m_Layout)
++			.addBindingLayout(sceneGraph->GetTextureDescriptors()->m_Layout)
++			.addBindingLayout(sceneGraph->GetCubemapDescriptors()->m_Layout)
++			.addBindingLayout(sceneGraph->GetDynamicVertexDescriptors()->m_Layout);
++
++		m_Pipeline = device->createComputePipeline(pipelineDesc);
++
++		logger::info("FalkosLichtspiel RT Lights: pipeline {}{}", m_Pipeline ? "created" : "FAILED", m_AmbientOcclusion ? " (with AO)" : "");
++	}
++
++	void DirectLights::Execute(nvrhi::ICommandList* commandList)
++	{
++		auto* renderer = GetRenderer();
++		auto* mainTexture = renderer->GetMainTexture();
++
++		nvrhi::ITexture* aoTexture = m_AmbientOcclusion ? m_AmbientOcclusion->GetResult() : nullptr;
++
++		if (!m_Pipeline || (m_AmbientOcclusion && !aoTexture)) {
++			// No RT light (rgb = 0) and open AO: the host then shows plain raster without point lights
++			// only if it skipped them, so keep this visible in the log instead of silently failing.
++			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(0.f, 0.f, 0.f, 1.f));
++			return;
++		}
++
++		if (aoTexture != m_BoundAO) {
++			m_BoundAO = aoTexture;
++			ResetBindings();
++		}
++
++		const uint32_t slot = renderer->GetCurrentSlot();
++
++		auto* scene = Scene::GetSingleton();
++		auto* sceneGraph = scene->GetSceneGraph();
++		auto* renderTargets = renderer->GetRenderTargets();
++		auto& textureManager = renderer->RenderTargetManager();
++
++		auto& bindingSet = m_BindingSets[slot];
++		if (!bindingSet) {
++			nvrhi::BindingSetDesc desc;
++			desc.bindings = {
++				nvrhi::BindingSetItem::Sampler(0, m_LinearWrapSampler),
++				nvrhi::BindingSetItem::Sampler(1, m_LinearClampSampler),
++				nvrhi::BindingSetItem::Sampler(2, m_PointWrapSampler),
++				nvrhi::BindingSetItem::ConstantBuffer(0, scene->GetCameraBuffer()),
++				nvrhi::BindingSetItem::ConstantBuffer(1, m_SceneTLAS->GetRaytracingBuffer()),
++				nvrhi::BindingSetItem::ConstantBuffer(2, scene->GetFeatureBuffer()),
++				nvrhi::BindingSetItem::RayTracingAccelStruct(0, m_SceneTLAS->GetTopLevelAS().GetHandle()),
++				nvrhi::BindingSetItem::Texture_SRV(1, scene->GetSkyHemiTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(2, scene->GetFlowMapTexture()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(3, sceneGraph->GetLightBuffer()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(4, sceneGraph->GetInstanceBuffer()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(5, sceneGraph->GetMeshBuffer()),
++				nvrhi::BindingSetItem::Texture_SRV(6, renderer->GetDepthTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(7, renderTargets->albedo),
++				nvrhi::BindingSetItem::Texture_SRV(8, renderTargets->normalRoughness),
++				nvrhi::BindingSetItem::Texture_SRV(9, renderTargets->gnmao),
++				nvrhi::BindingSetItem::Texture_SRV(10, textureManager.GetTexture(RenderTarget::FaceNormals)),
++				nvrhi::BindingSetItem::Texture_SRV(13, renderer->GetWaterDisplacementTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(14, scene->GetSkinDetailNormalTexture()),
++				nvrhi::BindingSetItem::Texture_SRV(15, scene->GetProjNoiseTexture()),
++				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, sceneGraph->GetTransformBuffer()),
++				nvrhi::BindingSetItem::RawBuffer_SRV(19, sceneGraph->GetMeshSlotRemapBuffer()),
++				nvrhi::BindingSetItem::RawBuffer_SRV(20, sceneGraph->GetPropertiesBuffer()),
++				nvrhi::BindingSetItem::Texture_UAV(0, mainTexture)
++			};
++			if (aoTexture)
++				desc.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(23, aoTexture));
++
++			bindingSet = renderer->GetDevice()->createBindingSet(desc, m_Layout);
++		}
++
++		if (!bindingSet) {
++			commandList->clearTextureFloat(mainTexture, nvrhi::AllSubresources, nvrhi::Color(0.f, 0.f, 0.f, 1.f));
++			return;
++		}
++
++		const auto resolution = renderer->GetDynamicResolution();
++		const auto groups = Util::Math::GetDispatchCount(resolution, 8);
++
++		commandList->beginMarker("FalkosLichtspiel RT Lights");
++
++		nvrhi::ComputeState state;
++		state.pipeline = m_Pipeline;
++		state.bindings = {
++			bindingSet,
++			sceneGraph->GetTriangleDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++			sceneGraph->GetVertexDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++			sceneGraph->GetMaterialDescriptors()->m_DescriptorTable,
++			sceneGraph->GetTextureDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++			sceneGraph->GetCubemapDescriptors()->m_DescriptorTable->GetDescriptorTable(),
++			sceneGraph->GetDynamicVertexDescriptors()->m_DescriptorTable
++		};
++		commandList->setComputeState(state);
++		commandList->dispatch(groups.x, groups.y);
++
++		commandList->endMarker();
++	}
++}
+diff --git a/src/Pass/Raytracing/DirectLights.h b/src/Pass/Raytracing/DirectLights.h
+new file mode 100644
+index 0000000..9286d3e
+--- /dev/null
++++ b/src/Pass/Raytracing/DirectLights.h
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// FalkosLichtspiel: raytraced local lights for the raster lighting modes.
++#pragma once
++
++#include <PCH.h>
++
++#include "Pass/RenderPass.h"
++#include "CameraData.hlsli"
++#include "framework/DescriptorTableManager.h"
++#include "Util.h"
++
++#include "Pass/Raytracing/Common/SceneTLAS.h"
++#include "Pass/Raytracing/AmbientOcclusion.h"
++
++#include "Events/ITLASUpdateListener.h"
++
++namespace Pass::Raytracing
++{
++	class DirectLights : public RenderPass, ITLASUpdateListener
++	{
++		nvrhi::ShaderHandle m_Shader;
++		nvrhi::ComputePipelineHandle m_Pipeline;
++		nvrhi::BindingLayoutHandle m_Layout;
++
++		eastl::array<nvrhi::BindingSetHandle, Constants::MAX_FRAMES_IN_FLIGHT> m_BindingSets{};
++		nvrhi::ITexture* m_BoundAO = nullptr;
++
++		nvrhi::SamplerHandle m_LinearWrapSampler;
++		nvrhi::SamplerHandle m_LinearClampSampler;
++		nvrhi::SamplerHandle m_PointWrapSampler;
++
++		SceneTLAS* m_SceneTLAS;
++		AmbientOcclusion* m_AmbientOcclusion;  // optional (RT Lights + AO)
++		bool m_Supported = true;
++
++		eastl::vector<ShaderDefine> m_Defines;
++
++		void ResetBindings() { m_BindingSets.fill(nullptr); }
++		eastl::vector<ShaderDefine> BuildDefines(const Settings& settings) const;
++
++	public:
++		DirectLights(Renderer* renderer, SceneTLAS* sceneTLAS, AmbientOcclusion* ambientOcclusion);
++
++		void OnTLASResized([[maybe_unused]] TopLevelAS& tlas) override { ResetBindings(); }
++
++		virtual void CreatePipeline() override;
++		virtual void ResolutionChanged([[maybe_unused]] uint2 resolution) override { ResetBindings(); }
++		virtual void SettingsChanged(const Settings& settings) override;
++		virtual void Execute(nvrhi::ICommandList* commandList) override;
++	};
++}
 diff --git a/src/Scene.cpp b/src/Scene.cpp
-index 2cf4f64..0df7c9f 100644
+index 2cf4f64..7cca579 100644
 --- a/src/Scene.cpp
 +++ b/src/Scene.cpp
-@@ -28,6 +28,7 @@
+@@ -28,6 +28,8 @@
  #include "Pass/Raytracing/PathTracing.h"
  #include "Pass/Raytracing/ReSTIRGIPass.h"
  #include "Pass/Raytracing/ShadowLab.h"
 +#include "Pass/Raytracing/AmbientOcclusion.h"
++#include "Pass/Raytracing/DirectLights.h"
  #include "Pass/Raster/GBuffer.h"
  #include "Pass/NRD/NRDIntegration.h"
  #include "Pass/Raytracing/Common/Accumulation.h"
-@@ -279,6 +280,24 @@ void Scene::UpdateMode(Mode mode)
+@@ -279,6 +281,37 @@ void Scene::UpdateMode(Mode mode)
  		renderGraph->AddNode({ true, "PT Composite", eastl::move(ptComposite) });
  		renderGraph->AddNode({ false, "Accumulation", eastl::move(accumulation) });
  	}
-+	else if (mode == Mode::AmbientOcclusion || mode == Mode::RTLightsAO) {
-+		// FalkosLichtspiel: raster lighting stays; only short AO rays are traced.
-+		// RTLightsAO gets its light pass in a later round and runs AO only for now.
++	else if (mode == Mode::AmbientOcclusion || mode == Mode::RTLights || mode == Mode::RTLightsAO) {
++		// FalkosLichtspiel: raster lighting stays; RT adds short AO rays and/or the local lights.
++		const bool withAO = mode != Mode::RTLights;
++		const bool withLights = mode != Mode::AmbientOcclusion;
++
 +		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
 +		auto landLod = eastl::make_unique<Pass::LandLODOccluder>(renderer);
 +		auto transformComp = eastl::make_unique<Pass::TransformComposition>(renderer);
 +		auto sceneTLAS = eastl::make_unique<Pass::SceneTLAS>(renderer);
 +		auto* tlasPtr = sceneTLAS.get();
 +		auto faceNormals = eastl::make_unique<Pass::Utility::FaceNormals>(renderer);
-+		auto aoPass = eastl::make_unique<Pass::Raytracing::AmbientOcclusion>(renderer, tlasPtr);
 +
 +		renderGraph->AddNode({ true, "Skinning", eastl::move(skinning) });
 +		renderGraph->AddNode({ true, "LandLOD Occluder", eastl::move(landLod) });
 +		renderGraph->AddNode({ true, "Transform Composition", eastl::move(transformComp) });
 +		renderGraph->AddNode({ true, "Scene TLAS", eastl::move(sceneTLAS) });
 +		renderGraph->AddNode({ true, "Face Normals", eastl::move(faceNormals) });
-+		renderGraph->AddNode({ true, "RT Ambient Occlusion", eastl::move(aoPass) });
++
++		Pass::Raytracing::AmbientOcclusion* aoPtr = nullptr;
++		if (withAO) {
++			// Alone, AO writes to Main; combined, the lights pass reads it and writes Main.
++			auto aoPass = eastl::make_unique<Pass::Raytracing::AmbientOcclusion>(renderer, tlasPtr, !withLights);
++			aoPtr = aoPass.get();
++			renderGraph->AddNode({ true, "RT Ambient Occlusion", eastl::move(aoPass) });
++		}
++
++		if (withLights) {
++			auto lightsPass = eastl::make_unique<Pass::Raytracing::DirectLights>(renderer, tlasPtr, aoPtr);
++			renderGraph->AddNode({ true, "RT Lights", eastl::move(lightsPass) });
++		}
 +	}
  	else if (mode == Mode::Debug) {
  		auto skinning = eastl::make_unique<Pass::Skinning>(renderer);
  		auto transformComp = eastl::make_unique<Pass::TransformComposition>(renderer);
+diff --git a/src/SceneGraph.cpp b/src/SceneGraph.cpp
+index 7332631..9719e72 100644
+--- a/src/SceneGraph.cpp
++++ b/src/SceneGraph.cpp
+@@ -372,6 +372,10 @@ void SceneGraph::UpdateLights(nvrhi::ICommandList* commandList)
+ 			if (flags & LightLimitFix::LightFlags::Linear)
+ 				lightData.Flags |= LightFlags::LinearLight;
+ #endif
++
++			// FalkosLichtspiel: the RT Lights pass walks the whole buffer, so inactive entries must not emit light.
++			if (!light.m_Active)
++				lightData.Fade = 0.0f;
+ 		}
+ 
+ 		numLights++;
 diff --git a/src/Types/Settings.h b/src/Types/Settings.h
 index cb4c4e9..b28cf1b 100644
 --- a/src/Types/Settings.h
